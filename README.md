@@ -146,6 +146,11 @@ auto-coder-trainer/
 ├── results/              # Result database
 │   ├── db.py             #   SQLite-backed storage
 │   └── report_generator.py  # Auto report generation
+├── prompt_cache/          # Prompt caching infrastructure
+│   ├── builder.py        #   Cache-safe prompt construction
+│   ├── monitor.py        #   Hit rate monitoring & alerts
+│   ├── compaction.py     #   Cache-safe context compression
+│   └── rules.py          #   Codified cache safety rules
 ├── cli/                  # CLI entry points
 │   └── main.py           #   `act` command
 └── skills/               # Top-level skills for Claude Code
@@ -167,6 +172,45 @@ The [ARIS (Auto-Research-In-Sleep)](aris/README.md) subsystem provides 75+ Claud
 
 See the [ARIS README](aris/README.md) for full documentation.
 
+## Prompt Caching
+
+"Cache Rules Everything Around Me." The `prompt_cache/` module implements cache-safe prompt construction for long-running agent sessions, based on Anthropic's prefix-matching cache architecture.
+
+**Core principle**: The API caches from the start of each request to each `cache_control` breakpoint. Prompt order and stability determine cache hit rate.
+
+| Layer | Content | Stability | Cache Scope |
+|-------|---------|-----------|-------------|
+| 0 | System prompt + tool definitions | Frozen at session start | Cross-session |
+| 1 | Project context (CLAUDE.md) | Frozen per project | Cross-session |
+| 2 | Session context (task, plan) | Append-only | Within session |
+| 3 | Conversation messages | Dynamic | Not cached |
+
+**Six rules enforced by `prompt_cache/rules.py`**:
+
+1. **Static prefix ordering** — static content before dynamic content
+2. **Messages for updates** — use `<system-reminder>` in messages, never modify system prompt
+3. **Tool set stability** — never add/remove tools mid-session; use deferred loading
+4. **Model consistency** — never switch models mid-session (cache is model-bound)
+5. **State via tools** — model state changes (Plan Mode) via tool calls, not toolset changes
+6. **Compaction prefix sharing** — context compression reuses parent's exact prefix
+
+```python
+from prompt_cache import PromptBuilder, CacheMonitor
+
+builder = PromptBuilder()
+builder.set_system_prompt("You are a coding agent...")
+builder.set_tools([...])                    # Set once, frozen
+builder.add_project_context(claude_md)       # Layer 1
+builder.add_session_context("Task: ...")     # Layer 2
+builder.inject_dynamic_update("Time: now")   # Via message, not system prompt
+
+monitor = CacheMonitor(alert_threshold=0.8)
+# After API call:
+monitor.record(response.usage)
+if not monitor.is_healthy():
+    print(monitor.diagnose_cache_miss())
+```
+
 ## Training Backends
 
 | Backend | Used for | Framework |
@@ -181,6 +225,7 @@ This project is under active development. Current status:
 - [x] ARIS Research Plane (75+ skills, 4 MCP servers)
 - [x] Recipe IR JSON Schema
 - [x] Project skeleton (trainers, evaluators, judge, results, CLI)
+- [x] Prompt cache infrastructure (builder, monitor, compaction, rules)
 - [ ] SFT trainer implementation (TRL)
 - [ ] RL trainer implementation (veRL)
 - [ ] SWE-bench evaluator integration
