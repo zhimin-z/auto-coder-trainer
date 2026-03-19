@@ -27,6 +27,7 @@ Each phase builds on the previous one's output. The final deliverables are a val
 - **AUTO_PROCEED = true** — If user doesn't respond at a checkpoint, automatically proceed with the best option after presenting results. Set to `false` to always wait for explicit user confirmation.
 - **REVIEWER_MODEL = `gpt-5.4`** — Model used via a secondary Codex agent. Must be an OpenAI model (e.g., `gpt-5.4`, `o3`, `gpt-4o`). Passed to sub-skills.
 - **ARXIV_DOWNLOAD = false** — When `true`, `/research-lit` downloads the top relevant arXiv PDFs during Phase 1. When `false` (default), only fetches metadata. Passed through to `/research-lit`.
+- **TOPIC_STRESS_TESTS = 2** — Before finalizing the top idea, run at least 2 adversarial stress tests (counter-hypothesis / distribution shift / hard negative slice) to reduce self-confirming pilots.
 
 > 💡 These are defaults. Override by telling the skill, e.g., `/idea-discovery "topic" — pilot budget: 4h per idea, 20h total` or `/idea-discovery "topic" — arxiv download: true`.
 
@@ -106,6 +107,7 @@ For each top idea (positive pilot signal), run a thorough novelty check:
 - Cross-verify with GPT-5.4 xhigh
 - Check for concurrent work (last 3-6 months)
 - Identify closest existing work and differentiation points
+- Run at least `TOPIC_STRESS_TESTS` adversarial checks against the core claim (e.g., strong baseline, shift split, or failure slice)
 
 **Update `IDEA_REPORT.md`** with deep novelty results. Eliminate any idea that turns out to be already published.
 
@@ -221,4 +223,3 @@ After this pipeline produces a validated top idea:
 
 Or use /research-pipeline for the full end-to-end flow.
 ```
-
