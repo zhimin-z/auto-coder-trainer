@@ -1063,6 +1063,7 @@ claude
 
 ### 探索 / Harness / 自动化后续方向
 
+- [ ] **主动 GitHub AutoResearch 仓库探索** — 扩展 `/research-lit` 与 `/idea-creator`，主动挖掘 GitHub 上的 autoresearch/agent/coder-training 仓库，构建可复用能力地图（`research → idea → data/SFT/RL`，可选 `DPO/蒸馏`），并优先选择可基于现有仓库快速落地的模型优化路径。
 - [ ] **模型探索评测矩阵** — 增加一组固定小任务，在相同预算上限下比较执行者×评审者组合（Claude×GPT、GLM×MiniMax 等），统一报告收敛速度、分数稳定性与单位提升成本。
 - [ ] **Harness 级预算遥测** — 在 checkpoint 输出中增加每轮预算快照（`轮次`、`分数`、`gpu_hours_used / max`、`token_cost`），让长周期循环保持可解释、可控成本。
 - [ ] **结构化自动化 ablation** — 为 `/research-pipeline` 增加紧凑 `ablate` 参数覆盖，按“单变量族”扫描小参数表面，并自动排序结果，支持可复现调优。

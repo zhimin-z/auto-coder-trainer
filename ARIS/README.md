@@ -1170,6 +1170,7 @@ claude
 
 ### Exploration / Harness / Automation Next Steps
 
+- [ ] **Proactive GitHub autoresearch scouting** — extend `/research-lit` + `/idea-creator` to actively mine GitHub repos (autoresearch/agent/coder-training), build a reusable capability map (`research → idea → data/SFT/RL`, optional `DPO/distillation`), and prioritize repo-grounded implementation paths for improving coding models.
 - [ ] **Model exploration benchmark matrix** — add a small fixed task suite to compare executor×reviewer pairs (Claude×GPT, GLM×MiniMax, etc.) under the same budget cap, then report convergence speed, score stability, and cost-per-improvement.
 - [ ] **Harness-level budget telemetry** — print per-round budget snapshots (`round`, `score`, `gpu_hours_used / max`, `token_cost`) in checkpoint outputs so long loops stay interpretable and cost-safe.
 - [ ] **Structured automation ablations** — support a compact `ablate` override in `/research-pipeline` to sweep a tiny parameter surface (one variable family at a time) and auto-rank outcomes for reproducible tuning.
