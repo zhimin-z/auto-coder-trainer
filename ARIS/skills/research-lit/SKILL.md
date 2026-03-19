@@ -18,6 +18,8 @@ Research topic: $ARGUMENTS
 - **MAX_LOCAL_PAPERS = 20** — Maximum number of local PDFs to scan (read first 3 pages each). If more are found, prioritize by filename relevance to the topic.
 - **ARXIV_DOWNLOAD = false** — When `true`, download top 3-5 most relevant arXiv PDFs to PAPER_LIBRARY after search. When `false` (default), only fetch metadata (title, abstract, authors) via arXiv API — no files are downloaded.
 - **ARXIV_MAX_DOWNLOAD = 5** — Maximum number of PDFs to download when `ARXIV_DOWNLOAD = true`.
+- **GITHUB_REPO_SCOUT = true** — When `true` (default), proactively search GitHub for autoresearch/code repos related to the topic and map them into implementation/training tracks.
+- **GITHUB_MAX_REPOS = 12** — Maximum number of GitHub repos to include in the final landscape map.
 
 > 💡 Overrides:
 > - `/research-lit "topic" — paper library: ~/my_papers/` — custom local PDF path
@@ -26,6 +28,7 @@ Research topic: $ARGUMENTS
 > - `/research-lit "topic" — sources: web` — only search the web (skip all local)
 > - `/research-lit "topic" — arxiv download: true` — download top relevant arXiv PDFs
 > - `/research-lit "topic" — arxiv download: true, max download: 10` — download up to 10 PDFs
+> - `/research-lit "topic" — github scout: false` — disable GitHub repo scouting for this run
 
 ## Data Sources
 
@@ -54,7 +57,7 @@ Examples:
 | 1 | **Zotero** (via MCP) | `zotero` | Try calling any `mcp__zotero__*` tool — if unavailable, skip | Collections, tags, annotations, PDF highlights, BibTeX, semantic search |
 | 2 | **Obsidian** (via MCP) | `obsidian` | Try calling any `mcp__obsidian-vault__*` tool — if unavailable, skip | Research notes, paper summaries, tagged references, wikilinks |
 | 3 | **Local PDFs** | `local` | `Glob: papers/**/*.pdf, literature/**/*.pdf` | Raw PDF content (first 3 pages) |
-| 4 | **Web search** | `web` | Always available (WebSearch) | arXiv, Semantic Scholar, Google Scholar |
+| 4 | **Web + GitHub search** | `web` | Always available (WebSearch) | arXiv, Semantic Scholar, Google Scholar, GitHub repos |
 
 > **Graceful degradation**: If no MCP servers are configured, the skill works exactly as before (local PDFs + web search). Zotero and Obsidian are pure additions.
 
@@ -124,6 +127,14 @@ Before searching online, check if the user already has relevant papers locally:
 - Focus on papers from last 2 years unless studying foundational work
 - **De-duplicate**: Skip papers already found in Zotero, Obsidian, or local library
 
+If `GITHUB_REPO_SCOUT = true`, proactively run a GitHub repo pass in parallel with paper search:
+- Search GitHub for combinations of topic + `autoresearch`, `auto-research`, `ai research agent`, `coding agent`, `SFT`, `RLHF`, `DPO`, `distillation`
+- Prioritize repos with clear README, recent activity, and runnable training/evaluation code
+- Keep top `GITHUB_MAX_REPOS` candidates and capture:
+  - Repo URL, stars, last update date
+  - Pipeline stage coverage: `research`, `idea generation`, `data`, `SFT`, `RL/RLHF`, `DPO`, `distillation`, `evaluation`
+  - Reusability notes: setup complexity, dataset availability, license constraints
+
 **arXiv API search** (always runs, no download by default):
 
 Locate the fetch script and search arXiv directly:
@@ -161,6 +172,12 @@ For each relevant paper (from all sources), extract:
 - **Relevance**: How does it relate to our work?
 - **Source**: Where we found it (Zotero/Obsidian/local/web) — helps user know what they already have vs what's new
 
+For each shortlisted GitHub repo, extract:
+- **Core capability**: what stage(s) of the pipeline it supports
+- **Training readiness**: does it support data generation/curation, SFT, RL/RLHF, optional DPO/distillation
+- **Integration path**: how it can plug into our research→idea→training loop
+- **Gaps**: what's missing for a "perfect coder" objective
+
 ### Step 3: Synthesize
 - Group papers by approach/theme
 - Identify consensus vs disagreements in the field
@@ -176,6 +193,19 @@ Present as a structured literature table:
 ```
 
 Plus a narrative summary of the landscape (3-5 paragraphs).
+
+If GitHub scouting is enabled, also include:
+
+```
+| Repo | Stars | Focus | Pipeline Stages | Reuse Priority | Risks |
+|------|-------|-------|-----------------|----------------|-------|
+```
+
+And add a **Research → Idea → Training Bridge Map** section that explicitly maps:
+- research discovery inputs
+- idea generation signals
+- training execution tracks (`data`, `SFT`, `RL/RLHF`, optional `DPO`/`distillation`)
+- evaluation targets for coder quality improvements
 
 If Zotero BibTeX was exported, include a `references.bib` snippet for direct use in paper writing.
 

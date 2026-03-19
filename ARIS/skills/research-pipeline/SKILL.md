@@ -14,6 +14,7 @@ End-to-end autonomous research workflow for: **$ARGUMENTS**
 - **AUTO_PROCEED = true** — When `true`, Gate 1 auto-selects the top-ranked idea (highest pilot signal + novelty confirmed) and continues to implementation. When `false`, always waits for explicit user confirmation before proceeding.
 - **ARXIV_DOWNLOAD = false** — When `true`, `/research-lit` downloads the top relevant arXiv PDFs during literature survey. When `false` (default), only fetches metadata via arXiv API. Passed through to `/idea-discovery` → `/research-lit`.
 - **HUMAN_CHECKPOINT = false** — When `true`, the auto-review loops (Stage 4) pause after each round's review to let you see the score and provide custom modification instructions before fixes are implemented. When `false` (default), loops run fully autonomously. Passed through to `/auto-review-loop`.
+- **A_BUDGET_MINUTES = 20** — Every major code revision should include a fixed-time A/B sanity run (same seed + same wall-clock budget) before large GPU spending. Keep the new variant only if the target metric improves.
 
 > 💡 Override via argument, e.g., `/research-pipeline "topic" — AUTO_PROCEED: false, human checkpoint: true`.
 
@@ -84,6 +85,7 @@ Once the user confirms which idea to pursue:
    - Is the random seed fixed and controllable?
    - Are results saved to JSON/CSV for later analysis?
    - Is there proper logging for debugging?
+   - Is there a baseline-vs-candidate fixed-budget comparison plan (same setup, same wall-clock budget)?
 
 ### Stage 3: Deploy Experiments (Workflow 2 — Part 1)
 
@@ -157,6 +159,7 @@ After the auto-review loop completes, write a final status report:
 
 - **Human checkpoint after Stage 1 is controlled by AUTO_PROCEED.** When `false`, do not proceed without user confirmation. When `true`, auto-select the top idea after presenting results.
 - **Stages 2-4 can run autonomously** once the user confirms the idea. This is the "sleep and wake up to results" part.
+- **Adopt keep/discard discipline:** for each major change, run baseline vs candidate under the same fixed budget (`A_BUDGET_MINUTES`) and continue only when the target metric improves.
 - **If Stage 4 ends at round 4 without positive assessment**, stop and report remaining issues. Do not loop forever.
 - **Budget awareness**: Track total GPU-hours across the pipeline. Flag if approaching user-defined limits.
 - **Documentation**: Every stage updates its own output file. The full history should be self-contained.

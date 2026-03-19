@@ -20,6 +20,7 @@ Given a broad research direction from the user, systematically generate, validat
 - **MAX_PILOT_IDEAS = 3** — Pilot at most 3 ideas in parallel. Additional ideas are validated on paper only.
 - **MAX_TOTAL_GPU_HOURS = 8** — Total GPU budget for all pilots combined.
 - **REVIEWER_MODEL = `gpt-5.4`** — Model used via Codex MCP for brainstorming and review. Must be an OpenAI model (e.g., `gpt-5.4`, `o3`, `gpt-4o`).
+- **TRAINING_TRACKS = [`data`, `SFT`, `RL/RLHF`, `DPO(optional)`, `distillation(optional)`]** — Required downstream tracks to consider when ranking ideas for coder optimization.
 
 > 💡 Override via argument, e.g., `/idea-creator "topic" — pilot budget: 4h per idea, 20h total`.
 
@@ -37,13 +38,19 @@ Map the research area to understand what exists and where the gaps are.
    - Use 5+ different query formulations
    - Read abstracts and introductions of the top 10-15 papers
 
-2. **Build a landscape map**:
+3. **Proactively scout GitHub autoresearch repos**:
+   - Search GitHub for topic + `autoresearch`, `research agent`, `coding agent`, `SFT`, `RLHF`, `DPO`, `distillation`
+   - Keep repos with strong documentation, active maintenance, and runnable code
+   - Build a repo capability matrix for `research → idea → training` stages, with explicit tags for `data/SFT/RL/RLHF` and optional `DPO/distillation`
+
+4. **Build a landscape map**:
    - Group papers by sub-direction / approach
+   - Group repos by capability and maturity
    - Identify what has been tried and what hasn't
    - Note recurring limitations mentioned in "Future Work" sections
    - Flag any open problems explicitly stated by multiple papers
 
-3. **Identify structural gaps**:
+5. **Identify structural gaps**:
    - Methods that work in domain A but haven't been tried in domain B
    - Contradictory findings between papers (opportunity for resolution)
    - Assumptions that everyone makes but nobody has tested
@@ -66,6 +73,9 @@ mcp__codex__codex:
     Here is the current landscape:
     [paste landscape map from Phase 1]
 
+    Here are candidate GitHub repos we can build on:
+    [paste repo capability matrix from Phase 1]
+
     Key gaps identified:
     [paste gaps from Phase 1]
 
@@ -82,6 +92,8 @@ mcp__codex__codex:
     - Likely to produce a clear positive OR negative result (both are publishable)
     - Not "apply X to Y" unless the application reveals genuinely surprising insights
     - Differentiated from the 10-15 papers above
+    - Mappable to training tracks: data → SFT → RL/RLHF (with optional DPO/distillation)
+    - Implementable by extending or composing the candidate GitHub repos rather than greenfield from scratch
 
     Be creative but grounded. A great idea is one where the answer matters regardless of which way it goes.
 ```
@@ -96,6 +108,7 @@ For each generated idea, quickly evaluate:
    - Compute requirements (estimate GPU-hours)
    - Data availability
    - Implementation complexity
+   - Repository leverage: can we bootstrap from scoped GitHub repos?
    - Skip ideas requiring > 1 week of GPU time or unavailable datasets
 
 2. **Novelty quick-check**: For each idea, do 2-3 targeted searches to see if it's already been done. Full `/novelty-check` comes later for survivors.
