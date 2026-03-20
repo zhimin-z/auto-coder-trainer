@@ -7,11 +7,19 @@ import random
 def set_all_seeds(seed: int) -> None:
     """Set random seeds for Python, NumPy, PyTorch, and CUDA.
 
-    Sets seeds across all common sources of randomness to ensure
-    reproducible training and evaluation runs.
+    Sets seeds across all common sources of randomness to improve
+    reproducibility of training and evaluation runs.
+
+    Note: ``PYTHONHASHSEED`` is set as an environment variable here for
+    documentation purposes, but Python reads this variable only at interpreter
+    startup. Setting it at runtime has **no effect** on hash randomization for
+    the current process. To enforce hash seed reproducibility, export
+    ``PYTHONHASHSEED=<seed>`` in your shell or launcher script before starting
+    the Python interpreter.
     """
     # Python stdlib
     random.seed(seed)
+    # NOTE: has no effect at runtime — see docstring above.
     os.environ["PYTHONHASHSEED"] = str(seed)
 
     # NumPy

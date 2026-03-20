@@ -26,7 +26,13 @@ eval = [
     "swebench>=2.0.0",
 ]
 all = [
-    "auto-coder-trainer[sft,rl,eval]",
+    "trl>=0.12.0",
+    "transformers>=4.45.0",
+    "datasets>=3.0.0",
+    "peft>=0.13.0",
+    "accelerate>=1.0.0",
+    "verl>=0.3.0",
+    "swebench>=2.0.0",
 ]
 dev = [
     "pytest>=8.0",

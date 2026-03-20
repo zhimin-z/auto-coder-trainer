@@ -49,7 +49,6 @@ class CacheSafeCompactor:
         # When context window is filling up
         if compactor.should_compact(current_tokens, max_tokens):
             new_builder = compactor.compact(
-                messages=current_messages,
                 summary="User asked to implement feature X. We created files A, B, C..."
             )
             # new_builder shares parent's cache prefix
@@ -63,7 +62,7 @@ class CacheSafeCompactor:
         """Check if compaction is needed based on token usage."""
         return current_tokens / max_tokens >= self.compact_threshold
 
-    def compact(self, messages: list[dict[str, Any]], summary: str) -> PromptBuilder:
+    def compact(self, summary: str) -> PromptBuilder:
         """Create a compacted prompt builder that shares the parent's cache prefix.
 
         The returned builder has:
@@ -76,7 +75,6 @@ class CacheSafeCompactor:
         and only the new compacted messages will be processed fresh.
 
         Args:
-            messages: The full conversation messages to be compacted.
             summary: A text summary of the conversation so far.
 
         Returns:

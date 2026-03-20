@@ -24,10 +24,10 @@ def save_checkpoint(
     model_path = Path(model_path)
     checkpoint_dir = Path(checkpoint_dir)
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     ckpt_name = f"ckpt-{recipe_id}-{timestamp}"
     ckpt_path = checkpoint_dir / ckpt_name
-    ckpt_path.mkdir(parents=True, exist_ok=True)
+    ckpt_path.mkdir(parents=True)
 
     # Write metadata
     metadata = {

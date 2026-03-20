@@ -61,7 +61,7 @@
         "reward": {
           "type": "object",
           "properties": {
-            "type": { "enum": ["binary_pass", "weighted_pass", "entropy_aware", "composite"] },
+            "type": { "enum": ["binary_pass", "weighted_pass", "entropy_bonus", "entropy_aware", "length_penalty", "composite"] },
             "components": { "type": "array", "items": { "type": "object" } }
           }
         }

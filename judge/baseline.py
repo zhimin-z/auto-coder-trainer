@@ -22,7 +22,7 @@ def find_baseline(recipe: dict[str, Any], result_db: Any) -> dict[str, Any] | No
 
     # Pick the experiment with the best primary metric (resolve_rate)
     def _primary_metric(exp: dict[str, Any]) -> float:
-        metrics = exp.get("metrics", {})
+        metrics = exp.get("metrics_json", {})
         if isinstance(metrics, str):
             import json
             metrics = json.loads(metrics)
