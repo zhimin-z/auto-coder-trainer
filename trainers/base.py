@@ -60,8 +60,8 @@ class BaseTrainer(ABC):
 
         eval_results = []
         if train_result.status == "success" and train_result.checkpoint_path:
-            for benchmark in self.config.get("eval", {}).get("benchmarks", []):
-                for seed in self.config.get("eval", {}).get("seeds", [42]):
+            for benchmark in self.config.get("eval_config", {}).get("benchmarks", []):
+                for seed in self.config.get("eval_config", {}).get("seeds", [42]):
                     eval_result = self.evaluate(train_result.checkpoint_path, benchmark, seed)
                     eval_results.append(eval_result)
 

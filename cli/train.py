@@ -5,7 +5,6 @@ experiment, evaluates results, and submits to the experiment judge.
 """
 
 import argparse
-import hashlib
 import json
 import uuid
 from pathlib import Path
@@ -154,12 +153,13 @@ def run_train(args: argparse.Namespace) -> None:
     if train_result:
         try:
             from results.db import ResultDB
+            from judge.dedup import compute_config_hash
 
             db = ResultDB()
             db.connect()
 
             experiment_id = f"exp-{uuid.uuid4().hex[:8]}"
-            config_hash = hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()[:16]
+            config_hash = compute_config_hash(recipe)
 
             db.insert_experiment({
                 "id": experiment_id,
