@@ -1,12 +1,37 @@
 """Seed management utilities for reproducible experiments."""
 
+import os
+import random
+
 
 def set_all_seeds(seed: int) -> None:
     """Set random seeds for Python, NumPy, PyTorch, and CUDA.
 
-    TODO: Implement seed setting.
+    Sets seeds across all common sources of randomness to ensure
+    reproducible training and evaluation runs.
     """
-    raise NotImplementedError("Seed setting not yet implemented")
+    # Python stdlib
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+
+    # NumPy
+    try:
+        import numpy as np
+        np.random.seed(seed)
+    except ImportError:
+        pass
+
+    # PyTorch (CPU + CUDA)
+    try:
+        import torch
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+    except ImportError:
+        pass
 
 
 def get_seed_list(config: dict) -> list[int]:

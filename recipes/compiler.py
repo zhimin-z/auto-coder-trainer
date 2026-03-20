@@ -39,14 +39,57 @@ def load_schema() -> dict:
 
 def validate_recipe(recipe: dict, schema: dict) -> list[str]:
     """Validate a recipe against the schema. Returns list of errors (empty if valid)."""
-    # TODO: implement with jsonschema
-    raise NotImplementedError("Schema validation not yet implemented")
+    from jsonschema import Draft202012Validator
+
+    validator = Draft202012Validator(schema)
+    errors = []
+    for error in sorted(validator.iter_errors(recipe), key=lambda e: list(e.path)):
+        path = ".".join(str(p) for p in error.absolute_path) or "(root)"
+        errors.append(f"{path}: {error.message}")
+    return errors
 
 
 def compile_recipe(recipe: dict) -> TrainingConfig:
     """Compile a validated Recipe IR into an executable TrainingConfig."""
-    # TODO: implement compilation logic
-    raise NotImplementedError("Recipe compilation not yet implemented")
+    trainer = recipe["trainer"]
+    model = recipe["model"]
+    dataset = recipe.get("dataset", {})
+    eval_section = recipe.get("eval", {})
+    budget = recipe.get("budget", {})
+    ablation = recipe.get("ablation", [])
+
+    # Determine backend: use explicit value, or default based on trainer type
+    if "backend" in trainer:
+        backend = trainer["backend"]
+    else:
+        backend = "trl" if trainer["type"] == "sft" else "verl"
+
+    return TrainingConfig(
+        recipe_id=recipe["id"],
+        trainer_type=trainer["type"],
+        backend=backend,
+        model_config={
+            "base": model["base"],
+            "size": model.get("size"),
+            "adapter": model.get("adapter", "full"),
+        },
+        data_config={
+            "sources": dataset.get("sources", []),
+            "filters": dataset.get("filters", []),
+            "total_samples": dataset.get("total_samples"),
+        },
+        training_params={
+            **trainer.get("params", {}),
+            **({"reward": trainer["reward"]} if "reward" in trainer else {}),
+        },
+        eval_config={
+            "benchmarks": eval_section.get("benchmarks", []),
+            "metrics": eval_section.get("metrics", []),
+            "seeds": eval_section.get("seeds", [42, 123, 456]),
+        },
+        ablation_configs=ablation,
+        budget=budget,
+    )
 
 
 def main():

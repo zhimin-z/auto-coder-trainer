@@ -24,12 +24,31 @@ def compute_pass_at_k(results: Sequence[dict], k_values: Sequence[int] = (1, 5, 
     """Compute pass@k for multiple k values across all problems.
 
     Args:
-        results: List of {problem_id, n_samples, n_correct} dicts.
+        results: List of dicts, each with keys ``problem_id``,
+            ``n_samples`` (total generated), and ``n_correct``.
         k_values: k values to compute.
 
     Returns:
-        Dict mapping "pass@k" to the average pass@k across problems.
+        Dict mapping ``"pass@{k}"`` to the mean pass@k across problems.
 
-    TODO: Implement aggregation logic.
+    Raises:
+        ValueError: If *results* is empty or a k value exceeds the
+            number of samples for any problem.
     """
-    raise NotImplementedError("pass@k aggregation not yet implemented")
+    if not results:
+        raise ValueError("results must be a non-empty sequence")
+
+    aggregated: dict[str, float] = {}
+    for k in k_values:
+        scores: list[float] = []
+        for entry in results:
+            n = entry["n_samples"]
+            c = entry["n_correct"]
+            if k > n:
+                raise ValueError(
+                    f"k={k} exceeds n_samples={n} for problem "
+                    f"'{entry.get('problem_id', '?')}'"
+                )
+            scores.append(pass_at_k(n, c, k))
+        aggregated[f"pass@{k}"] = sum(scores) / len(scores)
+    return aggregated
