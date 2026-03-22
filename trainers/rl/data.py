@@ -220,8 +220,13 @@ def setup_rollout_env(env_config: dict[str, Any]) -> dict[str, Any]:
         return _setup_docker_env(env_config, timeout)
     elif env_type == "remote":
         return _setup_remote_env(env_config, timeout)
-    else:
+    elif env_type == "local":
         return _setup_local_env(env_config, timeout)
+    else:
+        raise ValueError(
+            f"Unknown rollout env type {env_type!r}. "
+            "Supported types: 'docker', 'remote', 'local'."
+        )
 
 
 def _setup_local_env(env_config: dict[str, Any], timeout: int) -> dict[str, Any]:
@@ -230,6 +235,12 @@ def _setup_local_env(env_config: dict[str, Any], timeout: int) -> dict[str, Any]
     import shutil
     import subprocess
     import tempfile
+
+    logger.warning(
+        "SECURITY WARNING: Local rollout environment executes arbitrary code "
+        "directly on the host via subprocess with NO sandboxing and NO network "
+        "isolation. Use 'docker' env type for production workloads."
+    )
 
     workdir = tempfile.mkdtemp(prefix="rl_rollout_")
     atexit.register(shutil.rmtree, workdir, True)
@@ -272,7 +283,7 @@ def _setup_docker_env(env_config: dict[str, Any], timeout: int) -> dict[str, Any
     image = env_config.get("image", "python:3.11-slim")
     memory_limit = env_config.get("memory_limit", "4g")
     network_disabled = not env_config.get("network", False)
-    allow_local_fallback = bool(env_config.get("allow_local_fallback", False))
+    allow_local_fallback = env_config.get("allow_local_fallback") is True
 
     try:
         import subprocess
@@ -282,7 +293,11 @@ def _setup_docker_env(env_config: dict[str, Any], timeout: int) -> dict[str, Any
         if allow_local_fallback:
             logger.warning("Docker not available, falling back to local env: %s", exc)
             return _setup_local_env(env_config, timeout)
-        logger.warning("Docker not available and local fallback disabled: %s", exc)
+        logger.warning(
+            "Docker not available and allow_local_fallback is not explicitly True "
+            "in env config. Set allow_local_fallback: true to permit unsandboxed "
+            "local execution. Error: %s", exc
+        )
         return {
             "env_type": "docker",
             "ready": False,
@@ -330,12 +345,21 @@ def _setup_docker_env(env_config: dict[str, Any], timeout: int) -> dict[str, Any
 
 def _setup_remote_env(env_config: dict[str, Any], timeout: int) -> dict[str, Any]:
     """Placeholder for remote sandbox (e.g. Modal, E2B, etc.)."""
-    logger.warning("Remote environment not yet fully implemented, returning stub")
+    backend = env_config.get("backend", "unspecified")
+    logger.warning(
+        "Remote rollout environment (backend=%r) is not yet implemented. "
+        "Supported remote backends that could be integrated: "
+        "Modal (modal.com), E2B (e2b.dev), fly.io Machines, AWS Lambda. "
+        "Contributions welcome.",
+        backend,
+    )
 
     def execute_fn(code: str, test_code: str = "") -> dict[str, Any]:
         raise NotImplementedError(
-            "Remote rollout environment requires configuring a sandbox service. "
-            "Set env_config['endpoint'] and env_config['api_key']."
+            f"Remote rollout environment (backend={backend!r}) is not yet implemented. "
+            "To add support, implement a remote sandbox adapter for one of: "
+            "Modal (modal.com), E2B (e2b.dev), fly.io Machines, or AWS Lambda. "
+            "Required env_config keys: 'backend', 'endpoint', 'api_key'."
         )
 
     return {"env_type": "remote", "ready": False, "execute_fn": execute_fn}

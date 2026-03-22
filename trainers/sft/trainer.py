@@ -10,6 +10,7 @@ from trainers.base import BaseTrainer, EvalResult, TrainResult
 from trainers.rl.data import setup_rollout_env
 from trainers.sft.data import format_for_sft, load_trajectory_data
 from trainers.utils.checkpoint import save_checkpoint
+from trainers.utils.lora import apply_lora
 from trainers.utils.seeds import set_all_seeds
 
 logger = logging.getLogger(__name__)
@@ -114,7 +115,7 @@ class SFTTrainer(BaseTrainer):
             )
             adapter = model_cfg.get("adapter", "full")
             if adapter in {"lora", "qlora"}:
-                model = self._apply_lora(model, adapter)
+                model = apply_lora(model, adapter, training_params, logger)
 
             max_length = int(training_params.get("max_length", training_params.get("max_prompt_length", 4096)))
             train_dataset = Dataset.from_list(self._train_examples)
@@ -248,24 +249,6 @@ class SFTTrainer(BaseTrainer):
             logger.warning("Structured evaluator unavailable for %s: %s", benchmark, exc)
             return self._basic_evaluate(checkpoint_path, benchmark, seed)
 
-    def _apply_lora(self, model: Any, adapter: str) -> Any:
-        try:
-            from peft import LoraConfig, TaskType, get_peft_model  # type: ignore[import-untyped]
-        except ImportError as exc:
-            raise RuntimeError("LoRA/QLoRA requires peft. Install it with: pip install peft") from exc
-
-        tp = self.config.get("training_params", {})
-        lora_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            r=int(tp.get("lora_r", 16)),
-            lora_alpha=int(tp.get("lora_alpha", 32)),
-            lora_dropout=float(tp.get("lora_dropout", 0.05)),
-            target_modules=tp.get("lora_target_modules", ["q_proj", "v_proj"]),
-        )
-        if adapter == "qlora":
-            logger.warning("QLoRA requested without explicit quantization config; using LoRA-compatible path")
-        return get_peft_model(model, lora_config)
-
     def _basic_evaluate(self, checkpoint_path: str, benchmark: str, seed: int) -> EvalResult:
         """Fallback evaluation using held-out examples + the rollout harness."""
         recipe_id = self.config.get("recipe_id", "unknown")
@@ -274,16 +257,18 @@ class SFTTrainer(BaseTrainer):
             return EvalResult(
                 recipe_id=recipe_id,
                 benchmark=benchmark,
-                metrics={"error": "no evaluation examples available"},
+                metrics={},
                 seed=seed,
+                details={"error": "no evaluation examples available"},
             )
         if not self._eval_env or not self._eval_env.get("ready"):
             error = self._eval_env.get("error", "eval environment not ready") if self._eval_env else "eval environment not ready"
             return EvalResult(
                 recipe_id=recipe_id,
                 benchmark=benchmark,
-                metrics={"error": error},
+                metrics={},
                 seed=seed,
+                details={"error": error},
             )
 
         try:
@@ -293,8 +278,9 @@ class SFTTrainer(BaseTrainer):
             return EvalResult(
                 recipe_id=recipe_id,
                 benchmark=benchmark,
-                metrics={"error": "torch/transformers not available for fallback evaluation"},
+                metrics={},
                 seed=seed,
+                details={"error": "torch/transformers not available for fallback evaluation"},
             )
 
         tokenizer = AutoTokenizer.from_pretrained(checkpoint_path, trust_remote_code=True)

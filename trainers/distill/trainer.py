@@ -11,6 +11,7 @@ from trainers.distill.data import load_distillation_data
 from trainers.rl.data import setup_rollout_env
 from trainers.sft.trainer import SFTTrainer
 from trainers.utils.checkpoint import save_checkpoint
+from trainers.utils.lora import apply_lora
 from trainers.utils.seeds import set_all_seeds
 
 logger = logging.getLogger(__name__)
@@ -114,7 +115,7 @@ class DistillTrainer(SFTTrainer):
             )
             adapter = model_cfg.get("adapter", "full")
             if adapter in {"lora", "qlora"}:
-                model = self._apply_lora(model, adapter)
+                model = apply_lora(model, adapter, training_params, logger)
 
             metrics: dict[str, float] = {}
             if "positive_sft" in stages or not stages:
@@ -264,9 +265,11 @@ class DistillTrainer(SFTTrainer):
             logger.info("Pairwise refinement explicitly disabled")
             return {}
         if refine_algorithm == "redi":
-            raise RuntimeError(
-                "REDI refinement is intentionally routed through backend='redi' so this project can use the upstream implementation directly."
+            logger.warning(
+                "REDI refinement is not supported in native distill mode — skipping pairwise stage. "
+                "Use backend=redi for proper REDI support."
             )
+            return {}
 
         stack = _load_hf_stack()
         Dataset = stack["Dataset"]

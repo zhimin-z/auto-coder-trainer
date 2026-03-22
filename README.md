@@ -174,6 +174,8 @@ auto-coder-trainer/
 │   ├── tinyzero/         #   TinyZero/veRL-compatible launch bundle compiler
 │   ├── sft/              #   Native SFT trainer (TRL backend)
 │   ├── rl/               #   Native RL trainer (veRL backend)
+│   ├── distill/          #   Native distillation trainer (trajectory SFT + DPO refinement)
+│   ├── upstream/         #   External upstream launcher bundles (Open-R1, Agent Distillation, REDI)
 │   └── utils/            #   Seeds, checkpoints
 ├── evaluators/           # Evaluation harness
 │   ├── swe_bench.py      #   SWE-bench evaluator
@@ -193,7 +195,8 @@ auto-coder-trainer/
 │   ├── compaction.py     #   Cache-safe context compression
 │   └── rules.py          #   Codified cache safety rules
 ├── cli/                  # CLI entry points
-│   └── main.py           #   `act` command
+│   ├── main.py           #   `act` command
+│   └── rerun.py          #   Auto-dispatch for upstream reruns (being added)
 └── skills/               # Top-level skills for Claude Code
     ├── collect/           #   /collect
     ├── compose/           #   /compose
@@ -302,6 +305,7 @@ This project is under active development. Current status:
 - [x] SWE-bench evaluator integration
 - [x] Persistent experiment recovery (`eval_runs`, tasks, artifacts, task ledgers)
 - [x] Upstream launcher adapters for Open-R1 / Agent Distillation / REDI
+- [x] Upstream launcher adapters with auto-dispatch (`rerun` command)
 - [ ] Case studies and reproductions
 
 ## License

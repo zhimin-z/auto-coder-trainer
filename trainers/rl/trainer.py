@@ -17,8 +17,9 @@ from typing import Any
 from trainers.base import BaseTrainer, TrainResult, EvalResult
 from trainers.rl.reward import build_reward, BaseReward
 from trainers.rl.data import load_rl_prompts, setup_rollout_env
-from trainers.utils.seeds import set_all_seeds
 from trainers.utils.checkpoint import save_checkpoint
+from trainers.utils.lora import apply_lora
+from trainers.utils.seeds import set_all_seeds
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +242,11 @@ class RLTrainer(BaseTrainer):
         try:
             from verl.trainer.main_ppo import main as verl_main  # type: ignore[import-untyped]
         except ImportError:
-            logger.warning("veRL not installed — falling back to built-in GRPO loop")
+            logger.warning(
+                "veRL not installed — falling back to built-in GRPO loop. "
+                "Built-in GRPO is a simplified debug implementation. "
+                "For production experiments, install veRL or use backend=tinyzero."
+            )
             return self._train_builtin_grpo(self.config.get("training_params", {}))
 
         logger.info("Starting veRL training (algorithm=%s)", verl_config.get("algorithm"))
@@ -290,6 +295,10 @@ class RLTrainer(BaseTrainer):
         Optimization for single-node training / debugging.  For production
         multi-GPU training, install veRL.
         """
+        logger.warning(
+            "Built-in GRPO is a simplified debug implementation. "
+            "For production experiments, install veRL or use backend=tinyzero."
+        )
         try:
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore[import-untyped]
@@ -329,7 +338,7 @@ class RLTrainer(BaseTrainer):
 
         # Apply LoRA if requested
         if adapter in ("lora", "qlora"):
-            model = self._apply_lora(model, adapter)
+            model = apply_lora(model, adapter, training_params, logger)
 
         # Reference model for KL divergence (frozen copy)
         ref_model = AutoModelForCausalLM.from_pretrained(
@@ -562,28 +571,6 @@ class RLTrainer(BaseTrainer):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _apply_lora(self, model: Any, adapter: str) -> Any:
-        """Apply LoRA or QLoRA adapter to the model."""
-        try:
-            from peft import LoraConfig, get_peft_model, TaskType  # type: ignore[import-untyped]
-        except ImportError as exc:
-            raise RuntimeError("LoRA requires the peft library: pip install peft") from exc
-
-        tp = self.config.get("training_params", {})
-        lora_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            r=tp.get("lora_r", 16),
-            lora_alpha=tp.get("lora_alpha", 32),
-            lora_dropout=tp.get("lora_dropout", 0.05),
-            target_modules=tp.get("lora_target_modules", ["q_proj", "v_proj"]),
-        )
-        model = get_peft_model(model, lora_config)
-        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        total = sum(p.numel() for p in model.parameters())
-        logger.info("LoRA applied: %.2fM / %.2fM trainable params (%.2f%%)",
-                     trainable / 1e6, total / 1e6, 100 * trainable / total)
-        return model
-
     def _basic_evaluate(self, checkpoint_path: str, benchmark: str, seed: int) -> EvalResult:
         """Basic self-evaluation using the rollout environment.
 
@@ -595,8 +582,9 @@ class RLTrainer(BaseTrainer):
             return EvalResult(
                 recipe_id=recipe_id,
                 benchmark=benchmark,
-                metrics={"error": "no rollout environment available"},
+                metrics={},
                 seed=seed,
+                details={"error": "no rollout environment available"},
             )
 
         try:
@@ -653,6 +641,7 @@ class RLTrainer(BaseTrainer):
             return EvalResult(
                 recipe_id=recipe_id,
                 benchmark=benchmark,
-                metrics={"error": "torch/transformers not available for evaluation"},
+                metrics={},
                 seed=seed,
+                details={"error": "torch/transformers not available for evaluation"},
             )

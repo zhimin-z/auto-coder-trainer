@@ -7,7 +7,9 @@
       "Bash(grep -n \"from evaluators\\\\|import evaluators\" /Users/yangchenghao/Desktop/auto-coder-trainer/trainers/*.py /Users/yangchenghao/Desktop/auto-coder-trainer/trainers/*/*.py)",
       "Bash(python -m pytest tests/ -v)",
       "Bash(python -m pytest tests/ -v --tb=short)",
-      "Bash(python -c \"from recipes.compiler import load_schema, validate_recipe, compile_recipe, normalize_recipe; import json; schema = load_schema\\(\\); recipe = json.load\\(open\\(''recipes/examples/baseline-sft.recipe.json''\\)\\); recipe = normalize_recipe\\(recipe\\); errs = validate_recipe\\(recipe, schema\\); print\\(''Schema validation errors:'', errs\\); cfg = compile_recipe\\(recipe\\); print\\(''Compiled:'', cfg.recipe_id, cfg.trainer_type, cfg.backend\\)\")"
+      "Bash(python -c \"from recipes.compiler import load_schema, validate_recipe, compile_recipe, normalize_recipe; import json; schema = load_schema\\(\\); recipe = json.load\\(open\\(''recipes/examples/baseline-sft.recipe.json''\\)\\); recipe = normalize_recipe\\(recipe\\); errs = validate_recipe\\(recipe, schema\\); print\\(''Schema validation errors:'', errs\\); cfg = compile_recipe\\(recipe\\); print\\(''Compiled:'', cfg.recipe_id, cfg.trainer_type, cfg.backend\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''cli/rerun.py''\\).read\\(\\)\\); print\\(''cli/rerun.py: OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''cli/main.py''\\).read\\(\\)\\); print\\(''cli/main.py: OK''\\)\")"
     ]
   }
 }

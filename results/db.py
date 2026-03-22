@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -45,6 +48,8 @@ class ResultDB:
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         schema = SCHEMA_PATH.read_text()
         self._conn.executescript(schema)
 
@@ -403,6 +408,34 @@ class ResultDB:
     def find_by_recipe_with_details(self, recipe_id: str) -> list[dict[str, Any]]:
         """Find all experiments for a recipe and attach detailed records."""
         return [self.get_experiment_bundle(experiment["id"]) for experiment in self.find_by_recipe(recipe_id)]
+
+    def verify_checkpoint(self, experiment_id: str) -> bool:
+        """Verify that an experiment's checkpoint file exists on disk.
+
+        Args:
+            experiment_id: The experiment ID to check.
+
+        Returns:
+            True if the checkpoint path exists on disk, False otherwise.
+        """
+        experiment = self.get_experiment(experiment_id)
+        if experiment is None:
+            logger.warning("Cannot verify checkpoint: experiment %r not found", experiment_id)
+            return False
+        checkpoint_path = experiment.get("checkpoint_path")
+        if not checkpoint_path:
+            logger.warning(
+                "Experiment %r has no checkpoint_path recorded", experiment_id
+            )
+            return False
+        exists = Path(checkpoint_path).exists()
+        if not exists:
+            logger.warning(
+                "Checkpoint missing on disk for experiment %r: %s",
+                experiment_id,
+                checkpoint_path,
+            )
+        return exists
 
     def find_by_config_hash(self, config_hash: str) -> list[dict[str, Any]]:
         """Find experiments with matching config hash (dedup check)."""

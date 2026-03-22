@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+from trainers.utils.budget import BudgetTracker
+
 
 @dataclass
 class TrainResult:
@@ -37,6 +39,10 @@ class BaseTrainer(ABC):
     def __init__(self, config: dict[str, Any], output_dir: str):
         self.config = config
         self.output_dir = output_dir
+        budget_cfg = config.get("budget")
+        self.budget_tracker: BudgetTracker | None = (
+            BudgetTracker(budget_cfg) if budget_cfg else None
+        )
 
     @abstractmethod
     def prepare_data(self) -> Any:
@@ -55,8 +61,14 @@ class BaseTrainer(ABC):
 
     def run(self) -> tuple[TrainResult, list[EvalResult]]:
         """Full pipeline: prepare → train → evaluate on all benchmarks."""
+        if self.budget_tracker is not None:
+            self.budget_tracker.start()
+
         self.prepare_data()
         train_result = self.train()
+
+        if self.budget_tracker is not None:
+            self.budget_tracker.check()
 
         eval_results = []
         if train_result.status == "success" and train_result.checkpoint_path:

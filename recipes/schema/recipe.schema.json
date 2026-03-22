@@ -71,7 +71,7 @@
       "type": "object",
       "description": "Optional distillation configuration for teacher-trajectory or process distillation.",
       "properties": {
-        "strategy": { "enum": ["trajectory", "process", "hybrid"], "default": "trajectory" },
+        "strategy": { "enum": ["trajectory", "process", "hybrid"], "default": "trajectory", "description": "Distillation strategy. 'trajectory': Implemented — train on teacher-generated traces. 'process': Not yet implemented — reserved for step-level distillation. 'hybrid': Not yet implemented — reserved for combined trajectory + process." },
         "teacher_model": { "type": "string", "description": "Teacher model identifier or descriptive label" },
         "teacher_mode": { "enum": ["offline_dataset", "local_model", "api"], "default": "offline_dataset" },
         "stages": {

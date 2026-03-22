@@ -50,6 +50,11 @@ def main():
     status_parser.add_argument("--open-only", action="store_true", help="Show only open tasks")
     status_parser.add_argument("--output", type=str, help="Optional path to save the status report")
 
+    # rerun
+    rerun_parser = subparsers.add_parser("rerun", help="Auto-dispatch pending tasks for a recipe")
+    rerun_parser.add_argument("--recipe-id", type=str, required=True, help="Recipe ID to process")
+    rerun_parser.add_argument("--dry-run", action="store_true", help="Show plan without executing")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -72,6 +77,9 @@ def main():
     elif args.command == "status":
         from cli.status import run_status
         run_status(args)
+    elif args.command == "rerun":
+        from cli.rerun import run_rerun
+        run_rerun(args)
 
 
 if __name__ == "__main__":
