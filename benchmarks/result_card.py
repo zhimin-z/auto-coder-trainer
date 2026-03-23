@@ -58,8 +58,14 @@ def generate_result_card(experiment_id: str, db: Any) -> ResultCard:
         raise ValueError(f"Experiment {experiment_id!r} not found in database")
 
     metrics = experiment.get("metrics_json") or {}
+    if isinstance(metrics, str):
+        metrics = json.loads(metrics)
     budget = experiment.get("budget_json") or {}
+    if isinstance(budget, str):
+        budget = json.loads(budget)
     recipe = experiment.get("recipe_json") or {}
+    if isinstance(recipe, str):
+        recipe = json.loads(recipe)
     verdicts = bundle.get("verdicts", [])
     latest_verdict = verdicts[-1]["verdict"] if verdicts else None
 

@@ -197,6 +197,9 @@ def _score_evidence(atom: dict, existing_tags: set[str] | None = None) -> dict:
             # Handle both ISO 8601 variants (with or without 'Z', with 'T')
             cleaned = pub_date_str.replace("Z", "+00:00")
             pub_dt = dt.datetime.fromisoformat(cleaned)
+            # Ensure timezone-aware for safe subtraction
+            if pub_dt.tzinfo is None:
+                pub_dt = pub_dt.replace(tzinfo=dt.timezone.utc)
             now = dt.datetime.now(dt.timezone.utc)
             age_days = max((now - pub_dt).days, 0)
             # Exponential decay: half-life of ~180 days
@@ -445,7 +448,7 @@ def _collect_online_atoms(query: str, max_papers: int, max_repos: int) -> tuple[
     atoms = [_paper_to_atom(paper) for paper in papers] + [_repo_to_atom(repo) for repo in repos]
     metadata = {
         "query": query,
-        "timestamp": dt.datetime.utcnow().isoformat() + "Z",
+        "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
         "papers_found": len(papers),
         "repos_found": len(repos),
         "errors": errors,

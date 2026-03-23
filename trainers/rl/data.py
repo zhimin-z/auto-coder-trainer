@@ -414,7 +414,7 @@ def _setup_modal_backend(env_config: dict[str, Any], timeout: int) -> dict[str, 
             sb.wait()
             stdout = sb.stdout.read()
             stderr = sb.stderr.read()
-            exit_code = sb.returncode
+            exit_code = sb.returncode or 0
             tests_passed, tests_total = _parse_test_output(stdout + stderr)
             return {
                 "stdout": stdout,
@@ -513,7 +513,6 @@ def _setup_k8s_backend(env_config: dict[str, Any], timeout: int) -> dict[str, An
     """Set up an ephemeral Kubernetes pod backend."""
     try:
         from kubernetes import client as k8s_client, config as k8s_config  # noqa: F811
-        from kubernetes.stream import stream as k8s_stream
     except ImportError:
         msg = (
             "The 'kubernetes' package is required for the K8s backend. "
@@ -689,24 +688,59 @@ def _setup_sandbox_backend(env_config: dict[str, Any], timeout: int) -> dict[str
             image,
             "python", "-c", full_code,
         ]
-        cmd = ssh_prefix + docker_cmd
-        try:
-            result = sp.run(cmd, capture_output=True, text=True, timeout=timeout + 30)
-            tests_passed, tests_total = _parse_test_output(result.stdout + result.stderr)
-            return {
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "exit_code": result.returncode,
-                "tests_passed": tests_passed,
-                "tests_total": tests_total,
-            }
-        except sp.TimeoutExpired:
-            return _timeout_result(timeout, "Sandbox")
+        if ssh_prefix:
+            # Pass code via stdin to avoid shell metacharacter interpretation
+            # when SSH concatenates remote arguments into a shell string.
+            remote_docker_cmd = " ".join(
+                _shell_quote(arg) for arg in docker_cmd[:-2]  # everything except "python -c CODE"
+            )
+            # Pipe code into python via stdin instead of -c
+            remote_cmd = f"{remote_docker_cmd} python -"
+            cmd = ssh_prefix + [remote_cmd]
+            try:
+                result = sp.run(
+                    cmd, input=full_code, capture_output=True, text=True,
+                    timeout=timeout + 30,
+                )
+                tests_passed, tests_total = _parse_test_output(result.stdout + result.stderr)
+                return {
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "exit_code": result.returncode,
+                    "tests_passed": tests_passed,
+                    "tests_total": tests_total,
+                }
+            except sp.TimeoutExpired:
+                return _timeout_result(timeout, "Sandbox")
+            except Exception as exc:
+                return _error_result(f"Sandbox execution error: {exc}")
+        else:
+            cmd = docker_cmd
+            try:
+                result = sp.run(cmd, capture_output=True, text=True, timeout=timeout + 30)
+                tests_passed, tests_total = _parse_test_output(result.stdout + result.stderr)
+                return {
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "exit_code": result.returncode,
+                    "tests_passed": tests_passed,
+                    "tests_total": tests_total,
+                }
+            except sp.TimeoutExpired:
+                return _timeout_result(timeout, "Sandbox")
+            except Exception as exc:
+                return _error_result(f"Sandbox execution error: {exc}")
 
     return {"env_type": "remote/sandbox", "ready": True, "execute_fn": execute_fn}
 
 
 # -- Shared helpers for remote backends ---------------------------------------
+
+def _shell_quote(s: str) -> str:
+    """Shell-escape a string for safe use in remote SSH commands."""
+    import shlex
+    return shlex.quote(s)
+
 
 def _not_ready_env(env_type: str, error_msg: str) -> dict[str, Any]:
     """Return a not-ready environment dict with a stub execute_fn."""
@@ -796,6 +830,6 @@ def _parse_test_output(output: str) -> tuple[int, int]:
         unittest_err = re.search(r"errors=(\d+)", output)
         fails = int(unittest_fail.group(1)) if unittest_fail else 0
         errs = int(unittest_err.group(1)) if unittest_err else 0
-        return total - fails - errs, total
+        return max(0, total - fails - errs), total
 
     return 0, 0

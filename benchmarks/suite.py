@@ -260,7 +260,7 @@ def main():
         description="Run a pre-defined benchmark suite for auto-coder-trainer",
     )
     parser.add_argument(
-        "--suite", type=str, required=True, choices=list(SUITES.keys()),
+        "--suite", type=str, choices=list(SUITES.keys()),
         help="Suite to run: quick, standard, or full",
     )
     parser.add_argument(

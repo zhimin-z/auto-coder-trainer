@@ -1998,11 +1998,14 @@ class ReportGenerator:
             return "No experiments to conclude on.\n"
 
         total = len(bundles)
+        # Count per-experiment latest verdict (consistent with decision report)
         accepted = sum(
-            1 for v in verdicts if v.get("verdict") == "accept"
+            1 for d in bundles
+            if d.get("verdicts") and d["verdicts"][-1].get("verdict") == "accept"
         )
         rejected = sum(
-            1 for v in verdicts if v.get("verdict") == "reject"
+            1 for d in bundles
+            if d.get("verdicts") and d["verdicts"][-1].get("verdict") == "reject"
         )
 
         best_metrics: dict[str, tuple[float, str]] = {}

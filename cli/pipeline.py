@@ -159,9 +159,6 @@ def _run_rerun(recipe_id: str, *, dry_run: bool = False) -> None:
 # Decision logic
 # ---------------------------------------------------------------------------
 
-_TERMINAL_VERDICTS = {"accept", "reject"}
-
-
 def _has_research_suggestions(verdict: dict[str, Any] | None) -> bool:
     """Check whether the verdict carries actionable research suggestions."""
     if verdict is None:
@@ -397,6 +394,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     # Max iterations reached
     # ------------------------------------------------------------------
+    experiment_id = locals().get("experiment_id")  # safe if loop never ran
     print(f"\n[pipeline] {'='*60}")
     print(f"[pipeline] Max iterations ({max_iterations}) reached. Generating final report.")
     print(f"[pipeline] {'='*60}")

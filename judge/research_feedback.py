@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Any
 
 from judge.judge import JudgementResult, Verdict
-from judge.attribution import attribute_failure as _attribute_failure
 
 
 # ---------------------------------------------------------------------------
