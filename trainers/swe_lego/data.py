@@ -170,13 +170,21 @@ def convert_to_verifier_format(
     return output_path
 
 
+def _safe_run_sort_key(key: str) -> tuple[int, str]:
+    """Sort key for ``run_*`` fields.  Extracts the numeric suffix if present."""
+    parts = key.split("_", 1)
+    if len(parts) >= 2 and parts[1].isdigit():
+        return (int(parts[1]), key)
+    return (0, key)
+
+
 def _iter_runs(item: dict[str, Any]) -> list[dict[str, Any]]:
     """Yield per-run records from an instance-level trajectory dict."""
     instance_id = item.get("instance_id", "unknown")
 
     run_keys = sorted(
         (k for k in item if k.startswith("run_") and isinstance(item[k], dict)),
-        key=lambda x: int(x.split("_")[1]) if x.split("_")[1].isdigit() else x,
+        key=lambda x: _safe_run_sort_key(x),
     )
     if run_keys:
         results = []

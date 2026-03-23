@@ -145,11 +145,26 @@ def build_swe_lego_launcher_bundle(
         # Internal data carried for write step
         "_train_config_dict": train_config,
         "_dataset_info_dict": dataset_info,
+        "_model_config": model_cfg,
+        "_data_config": data_cfg,
+        "_training_params": training_params,
     }
 
 
 def write_swe_lego_launcher_bundle(bundle: dict[str, Any]) -> dict[str, str]:
-    """Persist a SWE-Lego launch bundle to disk."""
+    """Persist a SWE-Lego launch bundle to disk.
+
+    Generates all 5 pipeline scripts required by the SLURM pipeline:
+    ``run.sh``, ``serve_and_infer.sh``, ``eval.sh``,
+    ``verifier_train.sh``, and ``tts.sh``.
+    """
+    from trainers.swe_lego.inference import build_serve_and_infer_script, build_eval_script
+    from trainers.swe_lego.verifier import (
+        build_verifier_train_config,
+        build_verifier_train_bundle,
+        build_tts_pipeline_script,
+    )
+
     bundle_dir = Path(bundle["artifact_dir"])
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
@@ -167,12 +182,69 @@ def write_swe_lego_launcher_bundle(bundle: dict[str, Any]) -> dict[str, str]:
     )
     env_path.write_text(_render_env(bundle))
     run_path.write_text(_render_run_script(bundle))
+    run_path.chmod(0o755)
+
+    # --- Generate inference pipeline scripts ---
+    # Checkpoint path is unknown at generation time; use env var placeholder
+    # that the SLURM train job will resolve at runtime.
+    recipe_id = bundle.get("recipe_id", "unknown")
+    default_checkpoint = str(bundle_dir / "saves" / f"SWE-Lego-{recipe_id}")
+    checkpoint_placeholder = f"${{ACT_CHECKPOINT_PATH:-{default_checkpoint}}}"
+
+    serve_and_infer_path = bundle_dir / "serve_and_infer.sh"
+    serve_and_infer_path.write_text(
+        build_serve_and_infer_script(
+            checkpoint_path=checkpoint_placeholder,
+            bundle_dir=str(bundle_dir),
+        )
+    )
+    serve_and_infer_path.chmod(0o755)
+
+    eval_path = bundle_dir / "eval.sh"
+    eval_path.write_text(build_eval_script(bundle_dir=str(bundle_dir)))
+    eval_path.chmod(0o755)
+
+    # --- Generate verifier training script ---
+    model_cfg = bundle.get("_model_config", {})
+    training_params = bundle.get("_training_params", {})
+    data_cfg = bundle.get("_data_config", {})
+    verifier_config = build_verifier_train_config(
+        recipe_id=recipe_id,
+        model_cfg=model_cfg,
+        data_cfg=data_cfg,
+        training_params=training_params,
+        bundle_dir=str(bundle_dir),
+    )
+    verifier_bundle = build_verifier_train_bundle(
+        {"recipe_id": recipe_id, **verifier_config},
+        output_dir=str(bundle_dir),
+    )
+    verifier_train_path = bundle_dir / "verifier_train.sh"
+    verifier_train_path.write_text(verifier_bundle["run_script_content"])
+    verifier_train_path.chmod(0o755)
+
+    # Also write verifier YAML config
+    verifier_yaml_path = Path(verifier_bundle["files"]["yaml_config"])
+    verifier_yaml_path.parent.mkdir(parents=True, exist_ok=True)
+    verifier_yaml_path.write_text(verifier_bundle["yaml_content"])
+
+    # --- Generate TTS pipeline script ---
+    verifier_model_placeholder = (
+        f"${{ACT_VERIFIER_MODEL_PATH:-{bundle_dir / 'verifier' / 'saves' / f'{recipe_id}-verifier'}}}"
+    )
+    tts_path = bundle_dir / "tts.sh"
+    tts_path.write_text(
+        build_tts_pipeline_script(
+            verifier_model_path=verifier_model_placeholder,
+            policy_output_dir=checkpoint_placeholder,
+            bundle_dir=str(bundle_dir),
+        )
+    )
+    tts_path.chmod(0o755)
 
     # Strip internal keys before persisting the JSON manifest
     serializable = {k: v for k, v in bundle.items() if not k.startswith("_")}
     launcher_path.write_text(json.dumps(serializable, indent=2) + "\n")
-
-    run_path.chmod(0o755)
 
     return {
         "bundle_dir": str(bundle_dir),
@@ -181,6 +253,10 @@ def write_swe_lego_launcher_bundle(bundle: dict[str, Any]) -> dict[str, str]:
         "env": str(env_path),
         "run_script": str(run_path),
         "launcher_json": str(launcher_path),
+        "serve_and_infer_script": str(serve_and_infer_path),
+        "eval_script": str(eval_path),
+        "verifier_train_script": str(verifier_train_path),
+        "tts_script": str(tts_path),
     }
 
 
