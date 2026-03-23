@@ -93,8 +93,10 @@ def _register_builtins() -> None:
         from trainers.rl.trainer import RLTrainer
         register("rl", None, RLTrainer)
         register("rl", "verl", RLTrainer)
+        register("rl", "trl", RLTrainer)
         register("grpo", None, RLTrainer)
         register("grpo", "verl", RLTrainer)
+        register("grpo", "trl", RLTrainer)
     except ImportError:
         pass
 

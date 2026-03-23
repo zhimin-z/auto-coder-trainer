@@ -87,11 +87,12 @@ class RLTrainer(BaseTrainer):
         }
 
     def train(self) -> TrainResult:
-        """Run RL training with veRL (GRPO/PPO).
+        """Run RL training with veRL (GRPO/PPO) or TRL GRPOTrainer fallback.
 
-        Attempts to use the veRL library. If veRL is not installed, falls back
-        to a lightweight built-in GRPO training loop suitable for single-node
-        debugging.
+        Backend resolution:
+            - ``verl``: uses veRL library; falls back to TRL GRPOTrainer if unavailable.
+            - ``trl``: uses TRL GRPOTrainer directly.
+            - other: tries TRL GRPOTrainer.
         """
         recipe_id = self.config.get("recipe_id", "unknown")
         trainer_type = self.config.get("trainer_type", "grpo")
@@ -105,12 +106,11 @@ class RLTrainer(BaseTrainer):
         os.makedirs(self.output_dir, exist_ok=True)
 
         try:
-            verl_config = self._build_verl_config()
-
             if backend == "verl":
+                verl_config = self._build_verl_config()
                 metrics = self._train_with_verl(verl_config)
             else:
-                metrics = self._train_builtin_grpo(training_params)
+                metrics = self._train_with_trl_grpo(training_params)
 
             # Save checkpoint
             model_output = os.path.join(self.output_dir, "model")
@@ -243,11 +243,10 @@ class RLTrainer(BaseTrainer):
             from verl.trainer.main_ppo import main as verl_main  # type: ignore[import-untyped]
         except ImportError:
             logger.warning(
-                "veRL not installed — falling back to built-in GRPO loop. "
-                "Built-in GRPO is a simplified debug implementation. "
-                "For production experiments, install veRL or use backend=tinyzero."
+                "veRL not installed — falling back to TRL GRPOTrainer. "
+                "For production multi-GPU training, install veRL or use backend=tinyzero."
             )
-            return self._train_builtin_grpo(self.config.get("training_params", {}))
+            return self._train_with_trl_grpo(self.config.get("training_params", {}))
 
         logger.info("Starting veRL training (algorithm=%s)", verl_config.get("algorithm"))
 
@@ -288,284 +287,149 @@ class RLTrainer(BaseTrainer):
 
         return {"status": "completed_no_metrics"}
 
-    def _train_builtin_grpo(self, training_params: dict[str, Any]) -> dict[str, float]:
-        """Lightweight built-in GRPO training loop (no veRL dependency).
+    def _train_with_trl_grpo(self, training_params: dict[str, Any]) -> dict[str, float]:
+        """GRPO training using TRL's GRPOTrainer (fallback when veRL is unavailable).
 
-        This implements a simplified version of Group Relative Policy
-        Optimization for single-node training / debugging.  For production
-        multi-GPU training, install veRL.
+        Uses the mature TRL library's GRPOTrainer which handles generation,
+        advantage computation, and policy optimisation internally.
         """
-        logger.warning(
-            "Built-in GRPO is a simplified debug implementation. "
-            "For production experiments, install veRL or use backend=tinyzero."
-        )
         try:
-            import torch
-            from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore[import-untyped]
+            from trl import GRPOConfig, GRPOTrainer as TRLGRPOTrainer  # type: ignore[import-untyped]
+            from datasets import Dataset  # type: ignore[import-untyped]
+            from transformers import AutoTokenizer  # type: ignore[import-untyped]
         except ImportError as exc:
             raise RuntimeError(
-                "Built-in GRPO requires torch and transformers. "
-                "Install them with: pip install torch transformers"
+                "TRL GRPO fallback requires trl>=0.14, transformers, and datasets. "
+                "Install them with: pip install -e '.[rl]'"
             ) from exc
 
         model_cfg = self.config.get("model_config", {})
         model_name = model_cfg.get("base", "")
         adapter = model_cfg.get("adapter", "full")
 
-        lr = training_params.get("lr", 1e-6)
-        ppo_epochs = training_params.get("ppo_epochs", 4)
-        rollout_batch_size = training_params.get("rollout_batch_size", 16)
-        kl_coeff = training_params.get("kl_coeff", 0.05)
-        entropy_coeff = training_params.get("entropy_coeff", 0.01)
-        grad_accum = training_params.get("gradient_accumulation_steps", 4)
-        max_new_tokens = training_params.get("max_new_tokens", 4096)
-        num_iterations = training_params.get("num_iterations", len(self._prompts) // rollout_batch_size or 1)
-        group_size = training_params.get("group_size", 4)
+        lr = float(training_params.get("lr", 1e-6))
+        rollout_batch_size = int(training_params.get("rollout_batch_size", 16))
+        kl_coeff = float(training_params.get("kl_coeff", 0.05))
+        max_new_tokens = int(training_params.get("max_new_tokens", 4096))
+        group_size = int(training_params.get("group_size", 4))
+        num_iterations = int(
+            training_params.get("num_iterations", len(self._prompts) // rollout_batch_size or 1)
+        )
+        grad_accum = int(training_params.get("gradient_accumulation_steps", 4))
+        ppo_epochs = int(training_params.get("ppo_epochs", 4))
+        temperature = float(training_params.get("temperature", 0.7))
 
-        logger.info("Built-in GRPO: model=%s, lr=%s, iterations=%d", model_name, lr, num_iterations)
+        logger.info("TRL GRPOTrainer: model=%s, lr=%s, group_size=%d", model_name, lr, group_size)
 
-        # Load model and tokenizer
+        # Build prompt dataset for TRL GRPOTrainer (requires a "prompt" column)
+        prompt_records = []
+        prompts_by_text: dict[str, dict[str, Any]] = {}
+        for p in self._prompts:
+            text = p.get("prompt", "")
+            prompt_records.append({"prompt": text})
+            prompts_by_text[text] = p
+        train_dataset = Dataset.from_list(prompt_records)
+
+        # Build reward function adapter for TRL.
+        # TRL GRPOTrainer calls reward_func(completions=..., prompts=..., **kwargs)
+        reward_fn = self._reward_fn
+        execute_fn = self._rollout_env["execute_fn"] if self._rollout_env else None
+
+        def trl_reward_func(completions: list[str], prompts: list[str], **kwargs: Any) -> list[float]:
+            """Adapter: TRL GRPOTrainer reward interface → our BaseReward."""
+            rewards: list[float] = []
+            for completion, prompt in zip(completions, prompts):
+                prompt_data = prompts_by_text.get(prompt, {})
+                tests = prompt_data.get("tests", [])
+                trajectory: dict[str, Any] = {
+                    "response": completion,
+                    "tests_passed": 0,
+                    "tests_total": 0,
+                }
+                if execute_fn and tests:
+                    try:
+                        test_code = tests if isinstance(tests, str) else "\n".join(str(t) for t in tests)
+                        exec_result = execute_fn(completion, test_code)
+                        trajectory["tests_passed"] = exec_result.get("tests_passed", 0)
+                        trajectory["tests_total"] = exec_result.get("tests_total", 0)
+                    except Exception as e:
+                        logger.debug("Rollout execution failed: %s", e)
+                rewards.append(reward_fn.compute(trajectory))
+            return rewards
+
+        # Configure TRL GRPOTrainer
+        grpo_config = GRPOConfig(
+            output_dir=os.path.join(self.output_dir, "trainer_state"),
+            num_train_epochs=num_iterations,
+            per_device_train_batch_size=rollout_batch_size,
+            gradient_accumulation_steps=grad_accum,
+            learning_rate=lr,
+            warmup_ratio=float(training_params.get("warmup_ratio", 0.03)),
+            max_grad_norm=float(training_params.get("max_grad_norm", 1.0)),
+            logging_steps=int(training_params.get("logging_steps", 1)),
+            save_strategy="epoch",
+            report_to=[],
+            # GRPO-specific parameters
+            max_completion_length=max_new_tokens,
+            num_generations=group_size,
+            temperature=temperature,
+            beta=kl_coeff,
+            num_iterations=ppo_epochs,
+            remove_unused_columns=False,
+        )
+
+        # Apply LoRA config if requested (TRL GRPOTrainer supports peft_config)
+        peft_config = None
+        if adapter in ("lora", "qlora"):
+            try:
+                from peft import LoraConfig  # type: ignore[import-untyped]
+
+                peft_config = LoraConfig(
+                    r=int(training_params.get("lora_r", 16)),
+                    lora_alpha=int(training_params.get("lora_alpha", 32)),
+                    lora_dropout=float(training_params.get("lora_dropout", 0.05)),
+                    target_modules=training_params.get("lora_target_modules", "all-linear"),
+                    task_type="CAUSAL_LM",
+                )
+            except ImportError:
+                logger.warning("peft not installed — training without LoRA adapter")
+
+        # Tokenizer for processing_class
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-        device_map = "auto" if torch.cuda.is_available() else None
+        trainer_kwargs: dict[str, Any] = {
+            "model": model_name,
+            "reward_funcs": trl_reward_func,
+            "args": grpo_config,
+            "train_dataset": train_dataset,
+            "processing_class": tokenizer,
+        }
+        if peft_config is not None:
+            trainer_kwargs["peft_config"] = peft_config
 
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=dtype, device_map=device_map, trust_remote_code=True,
-        )
+        trainer_obj = TRLGRPOTrainer(**trainer_kwargs)
+        train_output = trainer_obj.train()
 
-        # Apply LoRA if requested
-        if adapter in ("lora", "qlora"):
-            model = apply_lora(model, adapter, training_params, logger)
-
-        # Reference model for KL divergence (frozen copy)
-        ref_model = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=dtype, device_map=device_map, trust_remote_code=True,
-        )
-        ref_model.eval()
-        for p in ref_model.parameters():
-            p.requires_grad = False
-
-        optimizer = torch.optim.AdamW(
-            [p for p in model.parameters() if p.requires_grad],
-            lr=lr,
-        )
-
-        # Simple linear warmup scheduler
-        warmup_ratio = training_params.get("warmup_ratio", 0.03)
-        warmup_steps = max(1, int(num_iterations * warmup_ratio))
-        def lr_lambda(step: int) -> float:
-            if step < warmup_steps:
-                return step / warmup_steps
-            return 1.0
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-
-        device = next(model.parameters()).device
-        reward_fn = self._reward_fn
-        execute_fn = self._rollout_env["execute_fn"] if self._rollout_env else None
-
-        all_rewards: list[float] = []
-        all_kls: list[float] = []
-
-        for iteration in range(num_iterations):
-            # Select batch of prompts
-            start_idx = (iteration * rollout_batch_size) % len(self._prompts)
-            batch_prompts = self._prompts[start_idx:start_idx + rollout_batch_size]
-            if not batch_prompts:
-                batch_prompts = self._prompts[:rollout_batch_size]
-
-            # ----------------------------------------------------------
-            # Rollout phase (no grad): generate G responses per prompt,
-            # collect rewards and per-token log-probs under both policy
-            # and reference model.
-            # ----------------------------------------------------------
-            # Each element: {generated_ids, policy_logprobs, ref_logprobs,
-            #                reward, advantage}  (all detached)
-            rollout_buffer: list[dict] = []
-            group_rewards_all: list[list[float]] = []
-
-            model.eval()
-            for prompt_data in batch_prompts:
-                prompt_text = prompt_data.get("prompt", "")
-                tests = prompt_data.get("tests", [])
-
-                inputs = tokenizer(prompt_text, return_tensors="pt", truncation=True, max_length=2048)
-                inputs = {k: v.to(device) for k, v in inputs.items()}
-                prompt_len = inputs["input_ids"].shape[1]
-
-                group_rewards: list[float] = []
-                group_entries: list[dict] = []
-
-                for _g in range(group_size):
-                    # Generate response
-                    with torch.no_grad():
-                        gen_out = model.generate(
-                            **inputs,
-                            max_new_tokens=max_new_tokens,
-                            do_sample=True,
-                            temperature=0.7,
-                            top_p=0.95,
-                            return_dict_in_generate=True,
-                        )
-
-                    full_ids = gen_out.sequences[0]          # [prompt + response]
-                    generated_ids = full_ids[prompt_len:]    # [response only]
-                    if generated_ids.numel() == 0:
-                        continue
-                    response_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
-
-                    # Compute reward via environment execution
-                    trajectory: dict = {
-                        "response": response_text,
-                        "tests_passed": 0,
-                        "tests_total": 0,
-                    }
-                    if execute_fn and tests:
-                        try:
-                            test_code = tests if isinstance(tests, str) else "\n".join(str(t) for t in tests)
-                            exec_result = execute_fn(response_text, test_code)
-                            trajectory["tests_passed"] = exec_result.get("tests_passed", 0)
-                            trajectory["tests_total"] = exec_result.get("tests_total", 0)
-                        except Exception as e:
-                            logger.debug("Rollout execution failed: %s", e)
-
-                    reward = reward_fn.compute(trajectory)
-                    group_rewards.append(reward)
-
-                    # Per-token log-probs under policy and reference (no grad)
-                    with torch.no_grad():
-                        policy_logits = model(full_ids.unsqueeze(0)).logits[0]
-                        ref_logits = ref_model(full_ids.unsqueeze(0)).logits[0]
-
-                    # Align: logit at position t predicts token at position t+1.
-                    # For generated tokens [prompt_len .. end], the predicting
-                    # logits are at positions [prompt_len-1 .. end-1].
-                    gen_policy_logits = policy_logits[prompt_len - 1:-1]   # [gen_len, vocab]
-                    gen_ref_logits = ref_logits[prompt_len - 1:-1]
-
-                    policy_lp = torch.log_softmax(gen_policy_logits, dim=-1)
-                    ref_lp = torch.log_softmax(gen_ref_logits, dim=-1)
-
-                    # Gather log-probs for the actual generated tokens
-                    token_policy_lp = policy_lp.gather(1, generated_ids.unsqueeze(1)).squeeze(1)
-                    token_ref_lp = ref_lp.gather(1, generated_ids.unsqueeze(1)).squeeze(1)
-
-                    group_entries.append({
-                        "generated_ids": generated_ids.detach(),
-                        "full_ids": full_ids.detach(),
-                        "prompt_len": prompt_len,
-                        "policy_logprobs": token_policy_lp.detach(),
-                        "ref_logprobs": token_ref_lp.detach(),
-                        "reward": reward,
-                    })
-
-                if not group_entries:
-                    continue
-
-                # GRPO advantage: normalise rewards within the group
-                rewards_t = torch.tensor([e["reward"] for e in group_entries], device=device)
-                if rewards_t.std() > 1e-8:
-                    advantages = (rewards_t - rewards_t.mean()) / rewards_t.std()
-                else:
-                    advantages = rewards_t - rewards_t.mean()
-
-                for g_idx, entry in enumerate(group_entries):
-                    entry["advantage"] = advantages[g_idx].item()
-                    rollout_buffer.append(entry)
-
-                group_rewards_all.append(group_rewards)
-
-            if not rollout_buffer:
-                logger.warning("Iteration %d: empty rollout buffer, skipping", iteration + 1)
-                continue
-
-            # ----------------------------------------------------------
-            # PPO update epochs: recompute policy log-probs (with grad)
-            # and optimise the clipped surrogate + KL penalty.
-            # ----------------------------------------------------------
-            model.train()
-            iteration_kls: list[float] = []
-
-            for _epoch in range(ppo_epochs):
-                optimizer.zero_grad()
-                accum_count = 0
-
-                for buf_idx, entry in enumerate(rollout_buffer):
-                    full_ids = entry["full_ids"]
-                    prompt_len = entry["prompt_len"]
-                    generated_ids = entry["generated_ids"]
-                    old_logprobs = entry["policy_logprobs"]      # detached from rollout
-                    ref_logprobs = entry["ref_logprobs"]
-                    advantage = entry["advantage"]
-
-                    # Recompute log-probs under current policy (with grad)
-                    logits = model(full_ids.unsqueeze(0)).logits[0]
-                    new_lp = torch.log_softmax(logits[prompt_len - 1:-1], dim=-1)
-                    new_token_lp = new_lp.gather(1, generated_ids.unsqueeze(1)).squeeze(1)
-
-                    # Importance ratio
-                    ratio = torch.exp(new_token_lp - old_logprobs)
-
-                    # Clipped surrogate (per-token, then mean)
-                    clip_range = training_params.get("clip_range", 0.2)
-                    surr1 = ratio * advantage
-                    surr2 = torch.clamp(ratio, 1.0 - clip_range, 1.0 + clip_range) * advantage
-                    policy_loss = -torch.min(surr1, surr2).mean()
-
-                    # KL penalty: approx KL(π_new || π_ref) per token
-                    kl = (new_token_lp - ref_logprobs).mean()
-                    iteration_kls.append(kl.item())
-
-                    loss = (policy_loss + kl_coeff * kl) / grad_accum
-                    loss.backward()
-                    accum_count += 1
-
-                    # Step every grad_accum entries
-                    if accum_count % grad_accum == 0:
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                        optimizer.step()
-                        optimizer.zero_grad()
-
-                # Flush remaining accumulated gradients
-                if accum_count % grad_accum != 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                    optimizer.step()
-                    optimizer.zero_grad()
-
-            scheduler.step()
-
-            # Logging
-            flat_rewards = [r for g in group_rewards_all for r in g]
-            avg_reward = sum(flat_rewards) / len(flat_rewards) if flat_rewards else 0.0
-            avg_kl = sum(iteration_kls) / len(iteration_kls) if iteration_kls else 0.0
-            all_rewards.append(avg_reward)
-            all_kls.append(avg_kl)
-            logger.info(
-                "Iteration %d/%d — avg_reward=%.4f, avg_kl=%.4f, batch_size=%d",
-                iteration + 1, num_iterations, avg_reward, avg_kl, len(batch_prompts),
-            )
-
-        # Save the trained model
+        # Save model
         model_output = os.path.join(self.output_dir, "model")
         os.makedirs(model_output, exist_ok=True)
-        model.save_pretrained(model_output)
+        trainer_obj.save_model(model_output)
         tokenizer.save_pretrained(model_output)
 
-        final_metrics = {
-            "avg_reward": sum(all_rewards) / len(all_rewards) if all_rewards else 0.0,
-            "final_reward": all_rewards[-1] if all_rewards else 0.0,
-            "avg_kl": sum(all_kls) / len(all_kls) if all_kls else 0.0,
-            "num_iterations": num_iterations,
-            "total_rollouts": num_iterations * rollout_batch_size * group_size,
-        }
+        # Collect metrics
+        metrics: dict[str, float] = {}
+        if isinstance(getattr(train_output, "metrics", None), dict):
+            metrics.update(
+                {k: float(v) for k, v in train_output.metrics.items() if isinstance(v, (int, float))}
+            )
 
         # Persist metrics
         with open(os.path.join(self.output_dir, "metrics.json"), "w") as f:
-            json.dump(final_metrics, f, indent=2)
+            json.dump(metrics, f, indent=2)
 
-        return final_metrics
+        return metrics
 
     # ------------------------------------------------------------------
     # Helpers
