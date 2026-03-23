@@ -1,5 +1,119 @@
 {
   "$schema": "../schema/recipe.schema.json",
   "description": "Registry of reusable method atoms extracted from papers. Each atom is a composable building block for training recipes.",
-  "atoms": []
+  "atom_schema": {
+    "description": "Schema for registering a method atom",
+    "required_fields": {
+      "id": "Unique atom identifier (e.g., 'atom-grpo-entropy-aware')",
+      "name": "Human-readable name",
+      "source_paper": "arXiv ID or DOI of the originating paper",
+      "category": "One of: reward_shaping, data_curation, training_algorithm, evaluation, distillation",
+      "description": "What this atom contributes to a recipe",
+      "recipe_fragment": "Partial recipe JSON that gets merged when this atom is composed into a recipe"
+    },
+    "optional_fields": {
+      "dependencies": "List of other atom IDs this atom requires",
+      "conflicts": "List of atom IDs incompatible with this atom",
+      "tags": "Free-form tags for search/filtering",
+      "validated": "Whether this atom has been tested in a real training run"
+    }
+  },
+  "atoms": [
+    {
+      "id": "atom-grpo-base",
+      "name": "Group Relative Policy Optimization",
+      "source_paper": "2402.03300",
+      "category": "training_algorithm",
+      "description": "GRPO training with group-relative advantage normalization. No critic network needed — advantages computed within response groups.",
+      "tags": ["rl", "grpo", "on-policy"],
+      "validated": true,
+      "recipe_fragment": {
+        "trainer": {
+          "type": "grpo",
+          "params": {
+            "ppo_epochs": 4,
+            "kl_coeff": 0.05,
+            "clip_range": 0.2,
+            "group_size": 4
+          }
+        }
+      }
+    },
+    {
+      "id": "atom-entropy-aware-reward",
+      "name": "Entropy-Aware Reward Shaping",
+      "source_paper": "2504.XXXXX",
+      "category": "reward_shaping",
+      "description": "Combines weighted test-pass reward with entropy bonus to prevent mode collapse during RL training.",
+      "tags": ["reward", "entropy", "anti-collapse"],
+      "validated": true,
+      "recipe_fragment": {
+        "trainer": {
+          "reward": {
+            "type": "entropy_aware",
+            "entropy_coeff": 0.01,
+            "components": [
+              {"type": "binary_pass", "weight": 0.7},
+              {"type": "entropy_bonus", "weight": 0.3, "entropy_coeff": 0.01}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "atom-trajectory-distill",
+      "name": "Positive Trajectory Distillation",
+      "source_paper": "2502.XXXXX",
+      "category": "distillation",
+      "description": "SFT on positive teacher trajectories followed by optional DPO pairwise refinement on chosen/rejected traces.",
+      "tags": ["distillation", "sft", "dpo", "teacher-student"],
+      "validated": true,
+      "dependencies": [],
+      "recipe_fragment": {
+        "trainer": {
+          "type": "distill"
+        },
+        "distill": {
+          "strategy": "trajectory",
+          "teacher_mode": "offline_dataset",
+          "stages": ["positive_sft", "pairwise_refine"],
+          "refine_algorithm": "dpo"
+        }
+      }
+    },
+    {
+      "id": "atom-length-penalty",
+      "name": "Length Penalty Reward",
+      "source_paper": "n/a",
+      "category": "reward_shaping",
+      "description": "Penalizes overly verbose responses. Useful as a composite reward component to control output length.",
+      "tags": ["reward", "length", "efficiency"],
+      "validated": true,
+      "recipe_fragment": {
+        "trainer": {
+          "reward": {
+            "type": "length_penalty",
+            "max_length": 16384,
+            "coeff": 0.1
+          }
+        }
+      }
+    },
+    {
+      "id": "atom-quality-filter",
+      "name": "Quality Score Data Filter",
+      "source_paper": "n/a",
+      "category": "data_curation",
+      "description": "Filter training data by minimum quality score threshold. Applied during data loading.",
+      "tags": ["data", "filtering", "quality"],
+      "validated": true,
+      "recipe_fragment": {
+        "dataset": {
+          "filters": [
+            {"field": "quality_score", "op": "gte", "value": 0.7}
+          ]
+        }
+      }
+    }
+  ]
 }
