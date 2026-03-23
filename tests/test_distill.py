@@ -183,7 +183,7 @@ def test_train_dispatches_distill_trainer_and_persists_results(tmp_path: Path, m
     run_train(Namespace(recipe=str(recipe_path), output_dir=str(output_dir), dry_run=False))
 
     captured = capsys.readouterr().out
-    assert "Using distillation trainer" in captured
+    assert "DistillTrainer" in captured
     assert "Judge verdict: accept" in captured
     assert "Status     : success" in captured
 

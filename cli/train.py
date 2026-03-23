@@ -775,38 +775,23 @@ def run_train(args: argparse.Namespace) -> None:
         return
 
     # ------------------------------------------------------------------
-    # 4. Select and instantiate trainer
+    # 4. Select and instantiate trainer (registry-based dispatch)
     # ------------------------------------------------------------------
     trainer = None
     trainer_init_error = None
     try:
-        if config.trainer_type == "sft":
-            try:
-                from trainers.sft import SFTTrainer
-                trainer = SFTTrainer(config.__dict__, output_dir)
-                print("[train] Using SFT trainer (TRL backend).")
-            except ImportError:
-                print("[train] SFT trainer module not yet available.")
-                trainer_init_error = "trainer module not available"
-        elif config.trainer_type == "distill":
-            try:
-                from trainers.distill import DistillTrainer
-                trainer = DistillTrainer(config.__dict__, output_dir)
-                print("[train] Using distillation trainer (trajectory/process distillation backend).")
-            except ImportError:
-                print("[train] Distillation trainer module not yet available.")
-                trainer_init_error = "trainer module not available"
-        elif config.trainer_type in ("rl", "grpo"):
-            try:
-                from trainers.rl import RLTrainer
-                trainer = RLTrainer(config.__dict__, output_dir)
-                print("[train] Using RL trainer (veRL backend).")
-            except ImportError:
-                print("[train] RL trainer module not yet available.")
-                trainer_init_error = "trainer module not available"
+        from trainers.registry import get_trainer_class
+
+        trainer_cls = get_trainer_class(config.trainer_type, config.backend)
+        if trainer_cls is not None:
+            trainer = trainer_cls(config.__dict__, output_dir)
+            print(f"[train] Using {trainer_cls.__name__} ({config.backend} backend).")
         else:
-            print(f"[train] Unknown trainer type: {config.trainer_type}")
-            trainer_init_error = "unknown trainer type"
+            print(f"[train] No registered trainer for {config.trainer_type}/{config.backend}")
+            trainer_init_error = f"no registered trainer for {config.trainer_type}/{config.backend}"
+    except ImportError as exc:
+        print(f"[train] Trainer module not available: {exc}")
+        trainer_init_error = "trainer module not available"
     except Exception as exc:
         print(f"[train] Error initializing trainer: {exc}")
         trainer_init_error = str(exc)

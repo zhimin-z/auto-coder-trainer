@@ -601,7 +601,8 @@ class RLTrainer(BaseTrainer):
             model.eval()
 
             execute_fn = self._rollout_env["execute_fn"]
-            eval_prompts = self._prompts[:50]  # Sample for quick eval
+            eval_sample_size = self.config.get("training_params", {}).get("eval_sample_size", 50)
+            eval_prompts = self._prompts[:eval_sample_size]
 
             total_passed = 0
             total_tests = 0
