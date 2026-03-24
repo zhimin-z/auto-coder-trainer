@@ -13,6 +13,8 @@ from typing import Any
 
 import yaml
 
+from trainers.swe_lego.model_registry import ModelProfile, resolve_model_profile
+
 
 # ---------------------------------------------------------------------------
 # Paths relative to the trainer root
@@ -148,6 +150,7 @@ def build_swe_lego_launcher_bundle(
         "_model_config": model_cfg,
         "_data_config": data_cfg,
         "_training_params": training_params,
+        "_model_profile_overrides": training_params.get("model_profile_overrides"),
     }
 
 
@@ -191,17 +194,34 @@ def write_swe_lego_launcher_bundle(bundle: dict[str, Any]) -> dict[str, str]:
     default_checkpoint = str(bundle_dir / "saves" / f"SWE-Lego-{recipe_id}")
     checkpoint_placeholder = f"${{ACT_CHECKPOINT_PATH:-{default_checkpoint}}}"
 
+    model_base = bundle.get("_model_config", {}).get("base", "Qwen/Qwen3-8B")
+    profile: ModelProfile = resolve_model_profile(
+        model_base,
+        overrides=bundle.get("_model_profile_overrides"),
+    )
+    # Derive a short model name for OpenHands output path (e.g. "Qwen3.5-9B")
+    model_short_name = model_base.split("/")[-1] if "/" in model_base else model_base
+
     serve_and_infer_path = bundle_dir / "serve_and_infer.sh"
     serve_and_infer_path.write_text(
         build_serve_and_infer_script(
             checkpoint_path=checkpoint_placeholder,
             bundle_dir=str(bundle_dir),
+            max_model_len=profile.max_model_len,
+            model_name=model_base,
+            openhands_model_config=profile.openhands_model_config,
+            vllm_extra_flags=profile.vllm_extra_flags,
         )
     )
     serve_and_infer_path.chmod(0o755)
 
     eval_path = bundle_dir / "eval.sh"
-    eval_path.write_text(build_eval_script(bundle_dir=str(bundle_dir)))
+    eval_path.write_text(
+        build_eval_script(
+            bundle_dir=str(bundle_dir),
+            model_short_name=model_short_name,
+        )
+    )
     eval_path.chmod(0o755)
 
     # --- Generate verifier training script ---
