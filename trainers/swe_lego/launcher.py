@@ -78,6 +78,7 @@ def build_swe_lego_launcher_bundle(
     env: dict[str, str] = {
         "SWE_LEGO_ROOT": str(swe_lego_root),
         "LLAMA_FACTORY_DIR": str(llama_factory_dir),
+        "ACT_REPO_ROOT": str(repo_root),
         "ACT_RECIPE_ID": recipe_id,
         "ACT_GPU_COUNT": gpu_count,
     }
@@ -137,6 +138,7 @@ def build_swe_lego_launcher_bundle(
             "Install LLaMA-Factory (pip install -e LLaMA-Factory-0.9.4.dev0/) before launch.",
             "Merge dataset_info_patch.json into LLaMA-Factory's data/dataset_info.json.",
             "Run the generated run.sh script to start training.",
+            "After evaluation completes, run import_results.sh (or use the auto-submitted SLURM import stage) to sync results back into auto-coder-trainer.",
         ],
         "source_dataset_refs": [
             {
@@ -153,6 +155,7 @@ def build_swe_lego_launcher_bundle(
             "env": str(env_file),
             "run_script": str(run_file),
             "launcher_json": str(launcher_json),
+            "import_results_script": str(bundle_dir / "import_results.sh"),
         },
         # Internal data carried for write step
         "_train_config_dict": train_config,
@@ -167,9 +170,9 @@ def build_swe_lego_launcher_bundle(
 def write_swe_lego_launcher_bundle(bundle: dict[str, Any]) -> dict[str, str]:
     """Persist a SWE-Lego launch bundle to disk.
 
-    Generates all 5 pipeline scripts required by the SLURM pipeline:
+    Generates all pipeline scripts required by the SLURM pipeline:
     ``run.sh``, ``serve_and_infer.sh``, ``eval.sh``,
-    ``verifier_train.sh``, and ``tts.sh``.
+    ``verifier_train.sh``, ``tts.sh``, and ``import_results.sh``.
     """
     from trainers.swe_lego.inference import build_serve_and_infer_script, build_eval_script
     from trainers.swe_lego.verifier import (
@@ -186,6 +189,7 @@ def write_swe_lego_launcher_bundle(bundle: dict[str, Any]) -> dict[str, str]:
     env_path = Path(bundle["files"]["env"])
     run_path = Path(bundle["files"]["run_script"])
     launcher_path = Path(bundle["files"]["launcher_json"])
+    import_results_path = Path(bundle["files"]["import_results_script"])
 
     train_config_path.write_text(
         _render_train_yaml(bundle["_train_config_dict"])
@@ -196,6 +200,8 @@ def write_swe_lego_launcher_bundle(bundle: dict[str, Any]) -> dict[str, str]:
     env_path.write_text(_render_env(bundle))
     run_path.write_text(_render_run_script(bundle))
     run_path.chmod(0o755)
+    import_results_path.write_text(_render_import_results_script(bundle))
+    import_results_path.chmod(0o755)
 
     # --- Generate inference pipeline scripts ---
     # Checkpoint path is unknown at generation time; use env var placeholder
@@ -287,6 +293,7 @@ def write_swe_lego_launcher_bundle(bundle: dict[str, Any]) -> dict[str, str]:
         "eval_script": str(eval_path),
         "verifier_train_script": str(verifier_train_path),
         "tts_script": str(tts_path),
+        "import_results_script": str(import_results_path),
     }
 
 
@@ -443,6 +450,44 @@ def _render_run_script(bundle: dict[str, Any]) -> str:
             'cd "$LLAMA_FACTORY_DIR"',
             "",
             f"llamafactory-cli train {shlex.quote(train_config_path)} \"$@\"",
+            "",
+        ]
+    )
+
+
+def _render_import_results_script(bundle: dict[str, Any]) -> str:
+    """Render the script that syncs completed SWE-Lego results back into the DB."""
+    report_dir = Path(bundle["artifact_dir"]).parent / "reports"
+    experiment_id = bundle.get("experiment_id")
+    recipe_id = bundle.get("recipe_id")
+
+    command = [
+        "python",
+        "-m",
+        "cli.main",
+        "train",
+        "--import-results",
+        '"$SCRIPT_DIR"',
+        "--report-format",
+        "${ACT_REPORT_FORMAT:-blog}",
+        "--report-output",
+        shlex.quote(str(report_dir)),
+    ]
+    if recipe_id:
+        command.extend(["--recipe-id", shlex.quote(str(recipe_id))])
+    if experiment_id:
+        command.extend(["--experiment-id", shlex.quote(str(experiment_id))])
+
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            "",
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+            'source "$SCRIPT_DIR/env.sh"',
+            "",
+            'cd "$ACT_REPO_ROOT"',
+            " ".join(command),
             "",
         ]
     )

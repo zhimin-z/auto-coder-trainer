@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import trainers.slurm.submitter as submitter
 from trainers.slurm.submitter import render_sbatch
 
 
@@ -71,3 +72,35 @@ def test_render_sbatch_output_and_error_paths(tmp_path: Path) -> None:
 
     assert f"#SBATCH --output={log_dir}" in content
     assert f"#SBATCH --error={log_dir}" in content
+
+
+def test_run_swe_lego_pipeline_submits_import_stage(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+
+    written_scripts: list[Path] = []
+    submit_calls: list[tuple[str, object, str]] = []
+    job_ids = iter(["101", "102", "103", "104", "105", "106"])
+
+    def _fake_write(content: str, output_path: Path) -> Path:
+        output_path.write_text(content)
+        written_scripts.append(output_path)
+        return output_path
+
+    monkeypatch.setattr(submitter, "write_sbatch_script", _fake_write)
+    monkeypatch.setattr(submitter, "submit_job", lambda path: next(job_ids))
+
+    def _fake_submit_with_dependency(path: Path, deps, dep_type: str = "afterok") -> str:
+        submit_calls.append((Path(path).name, deps, dep_type))
+        return next(job_ids)
+
+    monkeypatch.setattr(submitter, "submit_with_dependency", _fake_submit_with_dependency)
+
+    result = submitter.run_swe_lego_pipeline(bundle_dir, _default_slurm_config())
+
+    assert "import_results" in result["job_ids"]
+    assert any(path.name == "import_results.sbatch" for path in written_scripts)
+    assert ("import_results.sbatch", "103", "afterok") in submit_calls

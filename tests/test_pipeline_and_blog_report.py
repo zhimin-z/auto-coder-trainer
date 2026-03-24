@@ -474,6 +474,54 @@ class TestPipeline:
         assert "Phase 2: COMPOSE" in captured
         assert "Phase 3: TRAIN" in captured
 
+    def test_pipeline_with_swe_lego_recipe_waits_for_external_completion(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+        capsys,
+    ) -> None:
+        recipe = {
+            "id": "recipe-swe-lego-pipeline-test",
+            "name": "SWE-Lego pipeline handoff test",
+            "model": {"base": "Qwen/Qwen3.5-9B", "adapter": "full"},
+            "dataset": {
+                "sources": [
+                    {"name": "swe-lego-real", "path": "SWE-Lego/SWE-Lego-Real-Data"},
+                ]
+            },
+            "trainer": {
+                "type": "sft",
+                "backend": "swe_lego",
+                "params": {"template": "qwen3", "deepspeed": "z2_offload"},
+            },
+            "eval": {"benchmarks": ["swe-bench-verified"], "seeds": [42]},
+        }
+        recipe_path = tmp_path / "recipe.json"
+        recipe_path.write_text(json.dumps(recipe, indent=2))
+        db_path = tmp_path / "results.db"
+        monkeypatch.setenv("ACT_RESULTS_DB", str(db_path))
+
+        from cli.pipeline import run_pipeline
+
+        report_dir = tmp_path / "reports"
+        run_pipeline(
+            Namespace(
+                query=None,
+                atoms=None,
+                recipe=str(recipe_path),
+                model="Qwen/Qwen3.5-9B",
+                output_dir=str(tmp_path / "outputs"),
+                report_dir=str(report_dir),
+                report_format="blog",
+                max_iterations=1,
+                dry_run=True,
+            )
+        )
+
+        captured = capsys.readouterr().out
+        assert "External execution is still pending." in captured
+        assert not (report_dir / "report.md").exists()
+
 
 # ---------------------------------------------------------------------------
 # CLI report format integration

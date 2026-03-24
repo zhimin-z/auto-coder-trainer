@@ -362,8 +362,8 @@ def run_swe_lego_pipeline(
 
     Stage dependency graph::
 
-        train ──► infer ──► eval ──► ┐
-          │                          │
+        train ──► infer ──► eval ──► import_results
+          │
           └──► verifier_train ──────► tts
 
     Parameters
@@ -401,6 +401,7 @@ def run_swe_lego_pipeline(
         ("eval", "eval.sh", "eval.sbatch"),
         ("verifier_train", "verifier_train.sh", "verifier_train.sbatch"),
         ("tts", "tts.sh", "tts.sbatch"),
+        ("import_results", "import_results.sh", "import_results.sbatch"),
     ]
 
     # 1. Render and write all sbatch scripts.
@@ -434,6 +435,11 @@ def run_swe_lego_pipeline(
     # Job 5: tts (afterok:eval AND verifier_train)
     job_ids["tts"] = submit_with_dependency(
         sbatch_paths["tts"], [job_ids["eval"], job_ids["verifier_train"]]
+    )
+
+    # Job 6: import_results (afterok:eval)
+    job_ids["import_results"] = submit_with_dependency(
+        sbatch_paths["import_results"], job_ids["eval"]
     )
 
     logger.info(

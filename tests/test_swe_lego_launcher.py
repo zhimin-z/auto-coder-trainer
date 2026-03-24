@@ -3,6 +3,7 @@ from argparse import Namespace
 from pathlib import Path
 
 from recipes.compiler import compile_recipe, load_schema, validate_recipe
+from results.db import ResultDB
 from trainers.swe_lego import build_swe_lego_launcher_bundle, write_swe_lego_launcher_bundle
 
 
@@ -58,6 +59,30 @@ def _swe_lego_8b_recipe() -> dict:
             },
         },
     }
+
+
+def _write_trainer_state(log_dir: Path, loss: float = 0.5) -> None:
+    state = {
+        "epoch": 4.0,
+        "global_step": 100,
+        "log_history": [
+            {"loss": 1.0, "learning_rate": 1e-4, "epoch": 1.0, "step": 25},
+            {"loss": 0.8, "learning_rate": 8e-5, "epoch": 2.0, "step": 50},
+            {"loss": 0.6, "learning_rate": 5e-5, "epoch": 3.0, "step": 75},
+            {"loss": loss, "learning_rate": 2e-5, "epoch": 4.0, "step": 100},
+        ],
+    }
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "trainer_state.json").write_text(json.dumps(state))
+
+
+def _write_swebench_report(results_dir: Path, resolved: int = 75, total: int = 500) -> None:
+    report = {
+        "resolved_ids": [f"instance_{i}" for i in range(resolved)],
+        "total_instances": total,
+    }
+    results_dir.mkdir(parents=True, exist_ok=True)
+    (results_dir / "openhands.swe_bench.json").write_text(json.dumps(report))
 
 
 def test_swe_lego_recipe_passes_schema_validation() -> None:
@@ -148,6 +173,95 @@ def test_swe_lego_train_prepares_bundle(tmp_path: Path, capsys) -> None:
     plan = json.loads((plan_dir / "execution-plan.json").read_text())
     assert plan["mode"] == "prepared"
     assert plan["launcher"]["backend"] == "swe_lego"
+
+
+def test_swe_lego_import_results_updates_db_and_generates_report(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    import trainers.swe_lego.results_bridge as bridge
+    from cli.train import run_train
+
+    recipe = _swe_lego_8b_recipe()
+    recipe_path = tmp_path / "swe-lego.recipe.json"
+    recipe_path.write_text(json.dumps(recipe, indent=2))
+
+    db_path = tmp_path / "results.db"
+    monkeypatch.setenv("ACT_RESULTS_DB", str(db_path))
+
+    output_dir = tmp_path / "outputs"
+    run_train(
+        Namespace(
+            recipe=str(recipe_path),
+            output_dir=str(output_dir),
+            dry_run=False,
+            no_submit=True,
+            import_results=None,
+            recipe_id=None,
+            experiment_id=None,
+            report_format="blog",
+            report_output=None,
+        ),
+    )
+
+    db = ResultDB(db_path)
+    db.connect()
+    try:
+        prepared_experiment = db.find_by_recipe(recipe["id"])[0]
+    finally:
+        db.close()
+
+    bundle_dir = output_dir / recipe["id"] / "swe_lego"
+    saves_dir = bundle_dir / "saves" / f"SWE-Lego-{recipe['id']}"
+    _write_trainer_state(saves_dir, loss=0.33)
+    (saves_dir / "config.json").write_text("{}")
+
+    swe_lego_root = tmp_path / "mock-swe-lego"
+    _write_swebench_report(swe_lego_root / "SWE-bench-4.0.4" / "results")
+    monkeypatch.setattr(bridge, "SWE_LEGO_ROOT", swe_lego_root)
+
+    report_dir = tmp_path / "reports"
+    run_train(
+        Namespace(
+            recipe=None,
+            output_dir=str(output_dir),
+            dry_run=False,
+            no_submit=True,
+            import_results=str(bundle_dir),
+            recipe_id=None,
+            experiment_id=None,
+            report_format="blog",
+            report_output=str(report_dir),
+        ),
+    )
+
+    captured = capsys.readouterr().out
+    assert "Results imported and stored in DB." in captured
+    assert "Verdict    : accept" in captured
+
+    db = ResultDB(db_path)
+    db.connect()
+    try:
+        experiment = db.get_experiment(prepared_experiment["id"])
+        assert experiment is not None
+        assert experiment["status"] == "success"
+        assert experiment["metrics_json"]["resolve_rate"] == 75 / 500 * 100.0
+
+        verdicts = db.get_verdicts_for_experiment(prepared_experiment["id"])
+        assert verdicts
+        assert verdicts[-1]["verdict"] == "accept"
+
+        tasks = db.get_tasks(recipe_id=recipe["id"], experiment_id=prepared_experiment["id"])
+        assert any(task["kind"] == "generate_report" and task["status"] == "completed" for task in tasks)
+
+        artifacts = db.get_artifacts_for_experiment(prepared_experiment["id"])
+        assert any(artifact["kind"] == "external_import_summary" for artifact in artifacts)
+        assert any(artifact["kind"] == "auto_report_blog" for artifact in artifacts)
+    finally:
+        db.close()
+
+    assert (report_dir / "report.md").exists()
 
 
 def test_swe_lego_verifier_recipe_passes_schema() -> None:

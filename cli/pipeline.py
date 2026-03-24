@@ -147,6 +147,36 @@ def _get_latest_verdict(recipe_id: str) -> dict[str, Any] | None:
     return None
 
 
+def _is_waiting_on_external_execution(
+    recipe_id: str,
+    experiment_id: str | None,
+) -> bool:
+    """Return True when the latest run is still waiting on manual/external work."""
+    if not experiment_id:
+        return False
+    try:
+        from results.db import ResultDB
+
+        db = ResultDB()
+        db.connect()
+        try:
+            experiment = db.get_experiment(experiment_id)
+            if experiment is None:
+                return False
+            if experiment.get("status") not in {"planned", "prepared", "running"}:
+                return False
+            tasks = db.get_tasks(recipe_id=recipe_id, experiment_id=experiment_id)
+            return any(
+                task.get("kind") == "execution_step"
+                and task.get("status") in {"pending", "blocked", "in_progress"}
+                for task in tasks
+            )
+        finally:
+            db.close()
+    except Exception:
+        return False
+
+
 def _run_rerun(recipe_id: str, *, dry_run: bool = False) -> None:
     """Dispatch pending tasks via the rerun command."""
     from cli.rerun import run_rerun
@@ -294,6 +324,13 @@ def run_pipeline(args: argparse.Namespace) -> None:
         verdict = _get_latest_verdict(recipe_id)
         verdict_value = verdict.get("verdict", "unknown") if verdict else "no_verdict"
         print(f"\n[pipeline] Judge verdict: {verdict_value}")
+
+        if verdict is None and _is_waiting_on_external_execution(recipe_id, experiment_id):
+            print("[pipeline] External execution is still pending.")
+            print("[pipeline] The launcher bundle has been prepared/submitted; result import and report generation will happen after the external run finishes.")
+            print("[pipeline] Use `act status --recipe-id "
+                  f"{recipe_id}` to track progress.")
+            return
 
         # Decide next action
         action = _decide_next_action(verdict)

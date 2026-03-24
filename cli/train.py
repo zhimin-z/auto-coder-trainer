@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from trainers.base import TrainResult
+from trainers.base import EvalResult, TrainResult
 
 
 _EXTERNAL_PREPARED_BACKENDS = {"tinyzero", "openr1", "agent_distill", "redi", "swe_lego"}
@@ -532,6 +532,425 @@ def _write_task_ledger(result_db, recipe_id: str, experiment_id: str | None, led
     return Path(paths["json"]), Path(paths["markdown"])
 
 
+def _load_json_if_exists(path: Path) -> dict[str, Any]:
+    """Read a JSON object from disk, returning {} on absence or parse failure."""
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _find_external_experiment(db, recipe_id: str, experiment_id: str | None) -> dict[str, Any] | None:
+    """Locate the prepared/running external experiment that should receive imported results."""
+    if experiment_id:
+        experiment = db.get_experiment(experiment_id)
+        if experiment is not None:
+            return experiment
+
+    experiments = [
+        experiment
+        for experiment in db.find_by_recipe(recipe_id)
+        if experiment.get("backend") == "swe_lego"
+    ]
+    if not experiments:
+        return None
+
+    for status in ("running", "prepared", "planned"):
+        for experiment in experiments:
+            if experiment.get("status") == status:
+                return experiment
+    return experiments[0]
+
+
+def _load_swe_lego_import_context(
+    bundle_dir: Path,
+    db,
+    *,
+    recipe_id_override: str | None = None,
+    experiment_id_override: str | None = None,
+) -> dict[str, Any]:
+    """Resolve recipe/experiment metadata for a completed SWE-Lego bundle."""
+    launcher = _load_json_if_exists(bundle_dir / "launcher.json")
+    execution_plan = _load_json_if_exists(bundle_dir.parent / "execution-plan.json")
+
+    recipe_id = (
+        recipe_id_override
+        or launcher.get("recipe_id")
+        or execution_plan.get("recipe_id")
+        or "imported"
+    )
+    experiment_id = experiment_id_override or launcher.get("experiment_id")
+
+    existing = _find_external_experiment(db, recipe_id, experiment_id)
+    if existing is not None:
+        recipe_id = existing.get("recipe_id", recipe_id)
+        experiment_id = existing.get("id", experiment_id)
+
+    if experiment_id is None:
+        experiment_id = f"exp-{uuid.uuid4().hex[:8]}"
+
+    recipe = {}
+    if existing is not None and isinstance(existing.get("recipe_json"), dict):
+        recipe = existing["recipe_json"]
+    if not recipe and isinstance(execution_plan.get("recipe"), dict):
+        recipe = execution_plan["recipe"]
+    if not recipe and isinstance(launcher.get("recipe"), dict):
+        recipe = launcher["recipe"]
+
+    config_hash = existing.get("config_hash") if existing is not None else launcher.get("config_hash")
+    if config_hash is None and recipe:
+        try:
+            from judge.dedup import compute_config_hash
+
+            config_hash = compute_config_hash(recipe)
+        except Exception:
+            config_hash = None
+    if config_hash is None:
+        config_hash = hashlib.sha1(
+            json.dumps(
+                {"recipe_id": recipe_id, "bundle_dir": str(bundle_dir)},
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+
+    model_base = ""
+    if existing is not None:
+        model_base = existing.get("model_base", "")
+    if not model_base and isinstance(recipe.get("model"), dict):
+        model_base = recipe["model"].get("base", "")
+
+    budget = {}
+    if existing is not None and isinstance(existing.get("budget_json"), dict):
+        budget = existing["budget_json"]
+    if not budget and isinstance(recipe.get("budget"), dict):
+        budget = recipe["budget"]
+
+    trainer_type = "sft"
+    backend = "swe_lego"
+    if existing is not None:
+        trainer_type = existing.get("trainer_type", trainer_type)
+        backend = existing.get("backend", backend)
+
+    return {
+        "recipe_id": recipe_id,
+        "experiment_id": experiment_id,
+        "recipe": recipe,
+        "config_hash": config_hash,
+        "model_base": model_base,
+        "budget": budget,
+        "trainer_type": trainer_type,
+        "backend": backend,
+        "bundle_dir": bundle_dir,
+        "plan_dir": bundle_dir.parent,
+    }
+
+
+def _coerce_import_train_result(
+    imported: dict[str, Any],
+    *,
+    recipe_id: str,
+    trainer_type: str,
+    backend: str,
+) -> TrainResult:
+    """Convert results_bridge output into the canonical TrainResult dataclass."""
+    payload = imported.get("train_result", {}) if isinstance(imported, dict) else {}
+    metrics = payload.get("metrics", {})
+    if not isinstance(metrics, dict):
+        metrics = {}
+    return TrainResult(
+        recipe_id=recipe_id,
+        trainer_type=trainer_type,
+        backend=backend,
+        status=str(payload.get("status", "failed")),
+        metrics={k: float(v) for k, v in metrics.items() if isinstance(v, (int, float))},
+        checkpoint_path=payload.get("checkpoint_path"),
+        error=payload.get("error"),
+    )
+
+
+def _coerce_import_eval_results(
+    imported: dict[str, Any],
+    *,
+    recipe_id: str,
+) -> list[EvalResult]:
+    """Convert results_bridge eval payloads into canonical EvalResult dataclasses."""
+    raw_results = imported.get("eval_results", []) if isinstance(imported, dict) else []
+    eval_results: list[EvalResult] = []
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        metrics = item.get("metrics", {})
+        if not isinstance(metrics, dict):
+            metrics = {}
+        details = item.get("details", {})
+        if not isinstance(details, dict):
+            details = {}
+        eval_results.append(
+            EvalResult(
+                recipe_id=recipe_id,
+                benchmark=str(item.get("benchmark", "")),
+                metrics={k: float(v) for k, v in metrics.items() if isinstance(v, (int, float))},
+                seed=int(item.get("seed", 42)),
+                details=details,
+            )
+        )
+    return eval_results
+
+
+def _mark_external_execution_tasks_completed(db, recipe_id: str, experiment_id: str) -> None:
+    """Close out preparatory execution tasks once imported results arrive."""
+    tasks = db.get_tasks(recipe_id=recipe_id, experiment_id=experiment_id)
+    for task in tasks:
+        if task.get("kind") != "execution_step":
+            continue
+        if task.get("status") == "completed":
+            continue
+        task["status"] = "completed"
+        note = "Completed by imported SWE-Lego bundle results."
+        task["notes"] = note if not task.get("notes") else f"{task['notes']} | {note}"
+        db.upsert_task(task)
+
+
+def _persist_import_summary(
+    bundle_dir: Path,
+    *,
+    recipe_id: str,
+    experiment_id: str,
+    train_result: TrainResult,
+    eval_results,
+    verdict,
+) -> Path:
+    """Write a compact import summary artifact beside the completed bundle."""
+    report_dir = bundle_dir / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = report_dir / f"{experiment_id}_import_summary.json"
+    payload = {
+        "recipe_id": recipe_id,
+        "experiment_id": experiment_id,
+        "train_result": train_result.__dict__,
+        "eval_results": [result.__dict__ for result in eval_results],
+        "verdict": verdict.verdict.value if verdict else None,
+        "reasoning": verdict.reasoning if verdict else None,
+        "checks": verdict.checks if verdict else {},
+        "suggestions": verdict.suggestions if verdict else [],
+    }
+    summary_path.write_text(json.dumps(payload, indent=2, default=str))
+    return summary_path
+
+
+def _import_swe_lego_results(args: argparse.Namespace) -> None:
+    """Import completed SWE-Lego results, update the DB, and auto-generate a report."""
+    from judge.judge import ExperimentJudge
+    from results.db import ResultDB
+    from trainers.swe_lego.results_bridge import import_results
+
+    bundle_dir = Path(getattr(args, "import_results"))
+    if not bundle_dir.exists():
+        print(f"[train] Error: import bundle not found: {bundle_dir}")
+        return
+
+    report_format = getattr(args, "report_format", "blog")
+    report_output = getattr(args, "report_output", None)
+
+    db = ResultDB()
+    db.connect()
+    try:
+        context = _load_swe_lego_import_context(
+            bundle_dir,
+            db,
+            recipe_id_override=getattr(args, "recipe_id", None),
+            experiment_id_override=getattr(args, "experiment_id", None),
+        )
+
+        print(f"[train] Importing SWE-Lego results from {bundle_dir}")
+        print(f"[train] Recipe ID: {context['recipe_id']}")
+        print(f"[train] Experiment ID: {context['experiment_id']}")
+
+        imported = import_results(
+            bundle_dir,
+            recipe_id=context["recipe_id"],
+            experiment_id=context["experiment_id"],
+        )
+        train_result = _coerce_import_train_result(
+            imported,
+            recipe_id=context["recipe_id"],
+            trainer_type=context["trainer_type"],
+            backend=context["backend"],
+        )
+        eval_results: list[EvalResult] = _coerce_import_eval_results(
+            imported,
+            recipe_id=context["recipe_id"],
+        )
+
+        judge = ExperimentJudge(result_db=db)
+        results_dict = {
+            "train": train_result.__dict__,
+            "eval": [result.__dict__ for result in eval_results],
+            "recipe": context["recipe"],
+            "ablation": context["recipe"].get("ablation", []) if isinstance(context["recipe"], dict) else [],
+            "expected_seeds": (
+                context["recipe"].get("eval", {}).get("seeds", [])
+                if isinstance(context["recipe"], dict)
+                else []
+            ),
+            "status": train_result.status,
+            "trainer_type": context["trainer_type"],
+            "backend": context["backend"],
+            "experiment_id": context["experiment_id"],
+        }
+        verdict = judge.judge(context["recipe_id"], results_dict)
+        print(f"[train] Judge verdict: {verdict.verdict.value} — {verdict.reasoning}")
+
+        summary_metrics = _aggregate_eval_results(eval_results) or (train_result.metrics or {})
+        db.insert_experiment(
+            {
+                "id": context["experiment_id"],
+                "recipe_id": context["recipe_id"],
+                "config_hash": context["config_hash"],
+                "status": train_result.status,
+                "trainer_type": context["trainer_type"],
+                "backend": context["backend"],
+                "model_base": context["model_base"],
+                "metrics_json": summary_metrics,
+                "train_metrics_json": train_result.metrics or {},
+                "recipe_json": context["recipe"],
+                "budget_json": context["budget"],
+                "checkpoint_path": train_result.checkpoint_path,
+                "error": train_result.error,
+            }
+        )
+        if eval_results:
+            db.insert_eval_runs(
+                [
+                    {
+                        "experiment_id": context["experiment_id"],
+                        "benchmark": result.benchmark,
+                        "seed": result.seed,
+                        "metrics_json": result.metrics,
+                        "details_json": result.details,
+                    }
+                    for result in eval_results
+                ]
+            )
+        db.insert_verdict(
+            {
+                "experiment_id": context["experiment_id"],
+                "verdict": verdict.verdict.value,
+                "reasoning": verdict.reasoning,
+                "checks_json": verdict.checks,
+                "suggestions_json": verdict.suggestions,
+            }
+        )
+
+        _mark_external_execution_tasks_completed(
+            db,
+            context["recipe_id"],
+            context["experiment_id"],
+        )
+        tasks = _post_train_tasks(
+            recipe_id=context["recipe_id"],
+            experiment_id=context["experiment_id"],
+            train_result=train_result,
+            verdict=verdict,
+            eval_results=eval_results,
+            expected_seeds=results_dict["expected_seeds"],
+            ablation_config=context["recipe"].get("ablation", []) if isinstance(context["recipe"], dict) else [],
+            result_db=db,
+        )
+        for task in tasks:
+            db.upsert_task(task)
+
+        summary_path = _persist_import_summary(
+            bundle_dir,
+            recipe_id=context["recipe_id"],
+            experiment_id=context["experiment_id"],
+            train_result=train_result,
+            eval_results=eval_results,
+            verdict=verdict,
+        )
+        artifact_rows = [
+            {"kind": "external_import_summary", "path": str(summary_path)},
+        ]
+        if train_result.checkpoint_path:
+            artifact_rows.append({"kind": "checkpoint", "path": train_result.checkpoint_path})
+        for result in eval_results:
+            report_path = result.details.get("report_path")
+            if report_path:
+                artifact_rows.append(
+                    {
+                        "kind": "swebench_report",
+                        "path": str(report_path),
+                        "metadata": {"benchmark": result.benchmark, "seed": result.seed},
+                    }
+                )
+        ledger_paths = _write_task_ledger(
+            db,
+            context["recipe_id"],
+            context["experiment_id"],
+            context["plan_dir"],
+        )
+        if ledger_paths:
+            artifact_rows.extend(
+                [
+                    {"kind": "task_ledger_json", "path": str(ledger_paths[0])},
+                    {"kind": "task_ledger_markdown", "path": str(ledger_paths[1])},
+                ]
+            )
+            print(f"[train] Task ledger written to {ledger_paths[0]}")
+        _persist_artifacts(db, context["recipe_id"], context["experiment_id"], artifact_rows)
+
+        report_dir = Path(report_output) if report_output else context["plan_dir"] / "reports"
+        from cli.report import run_report
+
+        run_report(
+            argparse.Namespace(
+                experiment_id=context["experiment_id"],
+                recipe_id=None,
+                format=report_format,
+                output=str(report_dir),
+            )
+        )
+        report_ext = ".tex" if report_format == "latex" else ".md"
+        report_path = report_dir / f"report{report_ext}"
+        if report_path.exists():
+            _persist_artifacts(
+                db,
+                context["recipe_id"],
+                context["experiment_id"],
+                [
+                    {
+                        "kind": f"auto_report_{report_format}",
+                        "path": str(report_path),
+                    }
+                ],
+            )
+        db.upsert_task(
+            _make_task(
+                recipe_id=context["recipe_id"],
+                experiment_id=context["experiment_id"],
+                kind="generate_report",
+                title="Generate and review experiment report",
+                status="completed",
+                priority="low",
+            )
+        )
+
+        print("[train] Results imported and stored in DB.")
+        if report_path.exists():
+            print(f"[train] Report written to {report_path}")
+        print("\n[train] === Summary ===")
+        print(f"[train] Recipe     : {context['recipe_id']}")
+        print(f"[train] Trainer    : {context['trainer_type']} / {context['backend']}")
+        print(f"[train] Status     : {train_result.status}")
+        print(f"[train] Verdict    : {verdict.verdict.value}")
+        print("[train] Done.")
+    finally:
+        db.close()
+
+
 def run_train(args: argparse.Namespace) -> None:
     """Execute the training pipeline.
 
@@ -547,13 +966,11 @@ def run_train(args: argparse.Namespace) -> None:
     # Handle --import-results mode
     import_results_dir = getattr(args, "import_results", None)
     if import_results_dir:
-        from trainers.swe_lego.results_bridge import import_and_judge
+        _import_swe_lego_results(args)
+        return
 
-        print(f"[train] Importing results from {import_results_dir}")
-        result = import_and_judge(import_results_dir, recipe_id="imported")
-        print(f"[train] Import complete — experiment_id: {result.get('experiment_id')}")
-        if result.get("verdict"):
-            print(f"[train] Verdict: {result['verdict']}")
+    if not getattr(args, "recipe", None):
+        print("[train] Error: provide a recipe path or use --import-results for completed external runs.")
         return
 
     recipe_path = Path(args.recipe)
@@ -667,6 +1084,9 @@ def run_train(args: argparse.Namespace) -> None:
             )
 
             launcher_bundle = build_swe_lego_launcher_bundle(config.__dict__, output_dir)
+            launcher_bundle["experiment_id"] = experiment_id
+            launcher_bundle["recipe"] = recipe
+            launcher_bundle["config_hash"] = config_hash
             launcher_paths = write_swe_lego_launcher_bundle(launcher_bundle)
             print(f"[train] SWE-Lego launch bundle ready: {launcher_paths['run_script']}")
 

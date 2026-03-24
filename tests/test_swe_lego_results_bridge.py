@@ -55,7 +55,7 @@ def test_parse_swebench_results_ok(tmp_path: Path) -> None:
     assert result["status"] == "ok"
     assert result["resolved_count"] == 75
     assert result["total_count"] == 500
-    assert result["resolve_rate"] == 75 / 500
+    assert result["resolve_rate"] == 75 / 500 * 100.0
 
 
 def test_parse_swebench_results_not_found(tmp_path: Path) -> None:

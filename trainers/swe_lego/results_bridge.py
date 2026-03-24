@@ -109,7 +109,7 @@ def parse_swebench_results(
         if isinstance(applied, list):
             total = len(applied)
 
-    resolve_rate = resolved_count / total if total > 0 else 0.0
+    resolve_rate = (resolved_count / total * 100.0) if total > 0 else 0.0
 
     per_instance: list[dict[str, Any]] = []
     for instance_id in report.get("resolved_ids", report.get("resolved", [])):
@@ -207,9 +207,9 @@ def _simple_verdict(results: dict[str, Any]) -> str:
         best_rate = max(
             er["metrics"].get("resolve_rate", 0) for er in results["eval_results"]
         )
-        if best_rate >= 0.3:
+        if best_rate >= 30.0:
             return "strong"
-        elif best_rate >= 0.15:
+        elif best_rate >= 15.0:
             return "moderate"
         elif best_rate > 0:
             return "weak"

@@ -1,8 +1,7 @@
 """Tests for SWE-Lego full pipeline script generation.
 
-Verifies that write_swe_lego_launcher_bundle produces all 5 scripts
-expected by the SLURM pipeline: run.sh, serve_and_infer.sh, eval.sh,
-verifier_train.sh, tts.sh.
+Verifies that write_swe_lego_launcher_bundle produces all scripts
+expected by the SLURM pipeline and the post-eval import bridge.
 """
 import json
 from pathlib import Path
@@ -39,7 +38,7 @@ def _swe_lego_recipe() -> dict:
 
 
 def test_bundle_generates_all_pipeline_scripts(tmp_path: Path) -> None:
-    """All 5 pipeline scripts must exist after write_swe_lego_launcher_bundle."""
+    """All pipeline scripts must exist after write_swe_lego_launcher_bundle."""
     recipe = _swe_lego_recipe()
     config = compile_recipe(recipe)
     bundle = build_swe_lego_launcher_bundle(config.__dict__, tmp_path)
@@ -51,6 +50,7 @@ def test_bundle_generates_all_pipeline_scripts(tmp_path: Path) -> None:
         "eval_script",
         "verifier_train_script",
         "tts_script",
+        "import_results_script",
     ]
     for key in expected_scripts:
         assert key in paths, f"Missing key {key!r} in returned paths"
@@ -108,6 +108,20 @@ def test_tts_script_content(tmp_path: Path) -> None:
     assert "ACT_VERIFIER_MODEL_PATH" in content or "VERIFIER_MODEL" in content
 
 
+def test_import_results_script_content(tmp_path: Path) -> None:
+    recipe = _swe_lego_recipe()
+    config = compile_recipe(recipe)
+    bundle = build_swe_lego_launcher_bundle(config.__dict__, tmp_path)
+    bundle["experiment_id"] = "exp-import-test"
+    paths = write_swe_lego_launcher_bundle(bundle)
+
+    content = Path(paths["import_results_script"]).read_text()
+    assert "python -m cli.main train" in content
+    assert "--import-results" in content
+    assert "--report-format" in content
+    assert "exp-import-test" in content
+
+
 def test_slurm_pipeline_scripts_at_expected_locations(tmp_path: Path) -> None:
     """Verify scripts are in bundle_dir root, matching SLURM submitter expectations."""
     recipe = _swe_lego_recipe()
@@ -122,6 +136,7 @@ def test_slurm_pipeline_scripts_at_expected_locations(tmp_path: Path) -> None:
         "eval.sh",
         "verifier_train.sh",
         "tts.sh",
+        "import_results.sh",
     ]
     for fname in expected_files:
         assert (bundle_dir / fname).exists(), f"{fname} not found in bundle_dir"
@@ -214,14 +229,14 @@ def test_qwen3_5_train_config_uses_correct_template(tmp_path: Path) -> None:
 
 
 def test_qwen3_5_all_pipeline_scripts_generated(tmp_path: Path) -> None:
-    """Qwen3.5 bundle should produce all 5 pipeline scripts."""
+    """Qwen3.5 bundle should produce all pipeline scripts."""
     recipe = _swe_lego_qwen3_5_recipe()
     config = compile_recipe(recipe)
     bundle = build_swe_lego_launcher_bundle(config.__dict__, tmp_path)
     paths = write_swe_lego_launcher_bundle(bundle)
 
     bundle_dir = Path(paths["bundle_dir"])
-    for fname in ["run.sh", "serve_and_infer.sh", "eval.sh", "verifier_train.sh", "tts.sh"]:
+    for fname in ["run.sh", "serve_and_infer.sh", "eval.sh", "verifier_train.sh", "tts.sh", "import_results.sh"]:
         assert (bundle_dir / fname).exists(), f"{fname} not found for Qwen3.5 bundle"
 
 
