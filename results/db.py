@@ -446,6 +446,100 @@ class ResultDB:
         )
         return [self._row_to_dict(row) for row in cur.fetchall()]
 
+    # ------------------------------------------------------------------
+    # SLURM job tracking
+    # ------------------------------------------------------------------
+
+    def insert_slurm_job(self, job: dict[str, Any]) -> int:
+        """Insert a SLURM job tracking record."""
+        conn = self._ensure_conn()
+        cur = conn.execute(
+            """INSERT INTO slurm_jobs
+               (job_id, experiment_id, recipe_id, pipeline_id, stage, bundle_dir, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                job["job_id"],
+                job["experiment_id"],
+                job["recipe_id"],
+                job.get("pipeline_id"),
+                job["stage"],
+                job.get("bundle_dir"),
+                job.get("status", "PENDING"),
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+    def insert_slurm_jobs(self, jobs: list[dict[str, Any]]) -> None:
+        """Batch insert SLURM job records."""
+        for job in jobs:
+            self.insert_slurm_job(job)
+
+    def get_slurm_jobs(
+        self,
+        *,
+        experiment_id: str | None = None,
+        recipe_id: str | None = None,
+        pipeline_id: str | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Query tracked SLURM jobs with optional filters."""
+        conn = self._ensure_conn()
+        clauses: list[str] = []
+        params: list[Any] = []
+        if experiment_id:
+            clauses.append("experiment_id = ?")
+            params.append(experiment_id)
+        if recipe_id:
+            clauses.append("recipe_id = ?")
+            params.append(recipe_id)
+        if pipeline_id:
+            clauses.append("pipeline_id = ?")
+            params.append(pipeline_id)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        query = "SELECT * FROM slurm_jobs"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY submitted_at, id"
+        cur = conn.execute(query, tuple(params))
+        return [dict(row) for row in cur.fetchall()]
+
+    _TERMINAL_SLURM_STATES = frozenset({
+        "COMPLETED", "FAILED", "CANCELLED", "CANCELLED+", "TIMEOUT",
+        "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED", "BOOT_FAIL", "DEADLINE",
+    })
+
+    def get_active_slurm_jobs(self, recipe_id: str | None = None) -> list[dict[str, Any]]:
+        """Return SLURM jobs NOT in terminal states."""
+        jobs = self.get_slurm_jobs(recipe_id=recipe_id)
+        return [j for j in jobs if j.get("status", "") not in self._TERMINAL_SLURM_STATES]
+
+    def update_slurm_job_status(
+        self,
+        job_id: str,
+        status: str,
+        *,
+        elapsed: str | None = None,
+        exit_code: str | None = None,
+        finished_at: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        """Update a tracked SLURM job's status."""
+        conn = self._ensure_conn()
+        conn.execute(
+            """UPDATE slurm_jobs
+               SET status = ?,
+                   elapsed = COALESCE(?, elapsed),
+                   exit_code = COALESCE(?, exit_code),
+                   finished_at = COALESCE(?, finished_at),
+                   error = COALESCE(?, error)
+               WHERE job_id = ?""",
+            (status, elapsed, exit_code, finished_at, error, job_id),
+        )
+        conn.commit()
+
     def get_best_recipe(self, metric: str = "resolve_rate") -> dict[str, Any] | None:
         """Get the best-performing experiment by a given metric."""
         experiments = [

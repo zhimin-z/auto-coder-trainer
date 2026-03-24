@@ -326,10 +326,27 @@ def run_pipeline(args: argparse.Namespace) -> None:
         print(f"\n[pipeline] Judge verdict: {verdict_value}")
 
         if verdict is None and _is_waiting_on_external_execution(recipe_id, experiment_id):
-            print("[pipeline] External execution is still pending.")
-            print("[pipeline] The launcher bundle has been prepared/submitted; result import and report generation will happen after the external run finishes.")
-            print("[pipeline] Use `act status --recipe-id "
-                  f"{recipe_id}` to track progress.")
+            print(f"\n[pipeline] {'='*60}")
+            print("[pipeline] SLURM pipeline submitted — training is running asynchronously.")
+            print(f"[pipeline] {'='*60}")
+            # Show tracked SLURM jobs if available
+            try:
+                from results.db import ResultDB
+                _db = ResultDB()
+                _db.connect()
+                try:
+                    slurm_jobs = _db.get_slurm_jobs(recipe_id=recipe_id)
+                    if slurm_jobs:
+                        for sj in slurm_jobs:
+                            print(f"[pipeline]   {sj.get('stage', '?'):20s}  "
+                                  f"job {sj.get('job_id', '?'):>10s}  {sj.get('status', '?')}")
+                finally:
+                    _db.close()
+            except Exception:
+                pass
+            print(f"\n[pipeline] Next steps:")
+            print(f"[pipeline]   act status --recipe-id {recipe_id} --slurm   # live SLURM status")
+            print(f"[pipeline]   act sync --recipe-id {recipe_id}             # import results when done")
             return
 
         # Decide next action

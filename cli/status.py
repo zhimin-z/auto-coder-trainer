@@ -1,4 +1,4 @@
-"""Status command — summarize tracked experiments, artifacts, and open tasks."""
+"""Status command — summarize tracked experiments, SLURM jobs, and open tasks."""
 
 from __future__ import annotations
 
@@ -11,13 +11,38 @@ def _render_status_report(
     recipe_id: str | None,
     experiments: list[dict],
     tasks: list[dict],
+    slurm_jobs: list[dict] | None = None,
 ) -> str:
     lines = ["# Auto-Coder-Trainer Status", ""]
     if recipe_id:
         lines.append(f"- **Recipe Filter**: {recipe_id}")
     lines.append(f"- **Tracked Experiments**: {len(experiments)}")
     lines.append(f"- **Visible Tasks**: {len(tasks)}")
+    if slurm_jobs is not None:
+        lines.append(f"- **Tracked SLURM Jobs**: {len(slurm_jobs)}")
     lines.append("")
+
+    # SLURM jobs section
+    if slurm_jobs:
+        lines.extend(
+            [
+                "## SLURM Jobs",
+                "| Job ID | Experiment | Stage | Status | Elapsed | Submitted |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ]
+        )
+        for job in slurm_jobs:
+            lines.append(
+                "| {job_id} | {experiment_id} | {stage} | {status} | {elapsed} | {submitted} |".format(
+                    job_id=job.get("job_id", "?"),
+                    experiment_id=job.get("experiment_id", "?"),
+                    stage=job.get("stage", "?"),
+                    status=job.get("status", "?"),
+                    elapsed=job.get("elapsed") or "-",
+                    submitted=job.get("submitted_at", "?"),
+                )
+            )
+        lines.append("")
 
     if tasks:
         lines.extend(
@@ -68,11 +93,51 @@ def _render_status_report(
             )
         lines.append("")
 
-    if not tasks and not experiments:
+    if not tasks and not experiments and not slurm_jobs:
         lines.append("_No tracked experiments or tasks yet._")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _poll_slurm_live(slurm_jobs: list[dict], db) -> list[dict]:
+    """Poll sacct for live status of non-terminal SLURM jobs and update DB.
+
+    Returns the updated job list. Fails silently if sacct is unavailable.
+    """
+    terminal = frozenset({
+        "COMPLETED", "FAILED", "CANCELLED", "CANCELLED+", "TIMEOUT",
+        "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED", "BOOT_FAIL", "DEADLINE",
+    })
+    try:
+        from trainers.slurm.submitter import check_job_status
+    except ImportError:
+        return slurm_jobs
+
+    updated = []
+    for job in slurm_jobs:
+        if job.get("status", "") in terminal:
+            updated.append(job)
+            continue
+        try:
+            live = check_job_status(job["job_id"])
+            job["status"] = live.get("state", job.get("status", "?"))
+            job["elapsed"] = live.get("elapsed", job.get("elapsed"))
+            job["exit_code"] = live.get("exit_code", job.get("exit_code"))
+            if job["status"] in terminal and not job.get("finished_at"):
+                from datetime import datetime, timezone
+                job["finished_at"] = datetime.now(timezone.utc).isoformat()
+            db.update_slurm_job_status(
+                job["job_id"],
+                job["status"],
+                elapsed=job.get("elapsed"),
+                exit_code=job.get("exit_code"),
+                finished_at=job.get("finished_at"),
+            )
+        except Exception:
+            pass  # sacct not available or job not found
+        updated.append(job)
+    return updated
 
 
 def run_status(args: argparse.Namespace) -> None:
@@ -82,6 +147,7 @@ def run_status(args: argparse.Namespace) -> None:
     recipe_id = getattr(args, "recipe_id", None)
     open_only = getattr(args, "open_only", False)
     output = getattr(args, "output", None)
+    show_slurm = getattr(args, "slurm", False)
 
     db = ResultDB()
     try:
@@ -93,10 +159,17 @@ def run_status(args: argparse.Namespace) -> None:
     try:
         experiments = db.list_experiments(recipe_id=recipe_id, limit=None)
         tasks = db.get_open_tasks(recipe_id=recipe_id) if open_only else db.get_tasks(recipe_id=recipe_id)
+
+        slurm_jobs = None
+        if show_slurm:
+            slurm_jobs = db.get_slurm_jobs(recipe_id=recipe_id) if recipe_id else db.get_active_slurm_jobs()
+            slurm_jobs = _poll_slurm_live(slurm_jobs, db)
+
         report = _render_status_report(
             recipe_id=recipe_id,
             experiments=experiments,
             tasks=tasks,
+            slurm_jobs=slurm_jobs,
         )
     finally:
         db.close()

@@ -36,9 +36,10 @@ This project runs across **two environments**:
 pip install -e ".[all,dev]"
 
 # Core commands (all execute on remote via VS Code Remote-SSH)
-act train recipes/examples/baseline-sft.recipe.json --dry-run   # Validate recipe
-act train recipes/examples/baseline-sft.recipe.json              # Run training
-act status --recipe-id <id>                                       # Check experiments
+act train recipes/examples/baseline-sft.recipe.json --dry-run    # Validate recipe
+act train recipes/examples/baseline-sft.recipe.json               # Submit training
+act status --recipe-id <id> --slurm                               # Live SLURM + DB status
+act sync --recipe-id <id>                                         # Import completed results
 act status --open-only                                            # Show pending tasks
 act rerun --recipe-id <id>                                        # Dispatch pending tasks
 act report --recipe-id <id> --format blog                         # Generate report
@@ -104,6 +105,14 @@ act train recipe.json --dry-run --no-submit
 act train recipe.json
 # train → infer(afterok:train) → eval(afterok:infer) → import_results(afterok:eval)
 #   └── verifier_train(afterok:train) → tts(afterok:eval,verifier_train)
+```
+
+```bash
+# 4. Check SLURM job status (polls sacct live)
+act status --recipe-id <id> --slurm
+
+# 5. When jobs finish, sync results → DB → judge → report
+act sync --recipe-id <id>
 ```
 
 Key generated configs:
@@ -216,12 +225,32 @@ Typical session:
 1. **Open VS Code**, connect Remote-SSH to `torch`
 2. **Open this project** in the remote window
 3. **Talk to Claude Code** — all commands execute on `torch`:
-   - "帮我改一下这个 recipe 的 learning rate 到 1e-5"  →  Claude Code edits file on remote
-   - "dry-run 看看有没有问题"  →  `act train recipe.json --dry-run` runs on remote
-   - "提交训练"  →  `act train recipe.json` submits SLURM jobs on remote cluster
-   - "看看训练状态"  →  `squeue -u $USER` / `act status` on remote
-   - "训练完了，分析一下结果"  →  Claude Code reads remote logs & DB
-   - "OOM 了，帮我调参重跑"  →  Claude Code edits recipe, resubmits
+
+```
+用户: "帮我改一下这个 recipe 的 learning rate 到 1e-5"
+  → Claude Code edits recipe JSON on remote
+
+用户: "dry-run 看看有没有问题"
+  → act train recipe.json --dry-run
+
+用户: "提交训练"
+  → act train recipe.json
+  → SLURM jobs submitted, job IDs tracked in DB
+
+用户: "看看训练状态"
+  → act status --recipe-id <id> --slurm
+  → Shows: train RUNNING, infer PENDING, eval PENDING...
+
+用户: "训练完了吗？导入结果"
+  → act sync --recipe-id <id>
+  → Auto-imports results, runs judge, generates report
+
+用户: "结果怎么样"
+  → Claude Code reads report + DB + SLURM logs
+
+用户: "OOM 了，帮我调参重跑"
+  → Claude Code edits recipe, resubmits via act train
+```
 
 **Remember**: Claude Code here is the operator, not the trainer. It reads/writes code and runs commands on the remote server. The actual GPU training is SLURM's job.
 

@@ -1099,6 +1099,22 @@ def run_train(args: argparse.Namespace) -> None:
                     launcher_paths["bundle_dir"], slurm_cfg
                 )
                 print(f"[train] SLURM pipeline submitted: {pipeline_result}")
+
+                # Persist SLURM job IDs in DB for tracking
+                if db is not None:
+                    slurm_records = []
+                    for stage, jid in pipeline_result["job_ids"].items():
+                        slurm_records.append({
+                            "job_id": jid,
+                            "experiment_id": experiment_id,
+                            "recipe_id": recipe_id,
+                            "pipeline_id": pipeline_result["pipeline_id"],
+                            "stage": stage,
+                            "bundle_dir": str(launcher_paths["bundle_dir"]),
+                            "status": "PENDING",
+                        })
+                    db.insert_slurm_jobs(slurm_records)
+                    print(f"[train] Tracked {len(slurm_records)} SLURM jobs in DB")
         except Exception as exc:
             print(f"[train] Error building SWE-Lego launch bundle: {exc}")
             return
@@ -1180,13 +1196,20 @@ def run_train(args: argparse.Namespace) -> None:
 
     if launcher_bundle is not None:
         json_path, md_path = _write_execution_plan(execution_plan, output_dir)
+        # If SLURM jobs were submitted, mark as "running"; otherwise "prepared"
+        slurm_submitted = (
+            config.backend == "swe_lego"
+            and config.budget.get("slurm")
+            and not getattr(args, "no_submit", False)
+        )
+        exp_status = "running" if slurm_submitted else "prepared"
         if db is not None and config_hash is not None:
             db.insert_experiment(
                 {
                     "id": experiment_id,
                     "recipe_id": recipe_id,
                     "config_hash": config_hash,
-                    "status": "prepared",
+                    "status": exp_status,
                     "trainer_type": config.trainer_type,
                     "backend": config.backend,
                     "model_base": config.model_config.get("base", ""),
@@ -1225,8 +1248,12 @@ def run_train(args: argparse.Namespace) -> None:
                 print(f"[train] Notes          : {launcher_paths['notes']}")
         print("\n[train] === Summary ===")
         print(f"[train] Recipe     : {recipe_id}")
+        print(f"[train] Experiment : {experiment_id}")
         print(f"[train] Trainer    : {config.trainer_type} / {config.backend}")
-        print("[train] Status     : prepared")
+        print(f"[train] Status     : {exp_status}")
+        if slurm_submitted:
+            print("[train] SLURM jobs tracked — use `act sync` to check completion and import results.")
+            print(f"[train] Use `act status --recipe-id {recipe_id} --slurm` for live SLURM status.")
         print("[train] Done.")
         return
 

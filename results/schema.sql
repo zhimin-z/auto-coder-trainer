@@ -78,6 +78,26 @@ CREATE INDEX IF NOT EXISTS idx_verdicts_experiment ON verdicts(experiment_id);
 CREATE INDEX IF NOT EXISTS idx_eval_runs_experiment ON eval_runs(experiment_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_recipe ON artifacts(recipe_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_experiment ON artifacts(experiment_id);
+CREATE TABLE IF NOT EXISTS slurm_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    experiment_id TEXT NOT NULL REFERENCES experiments(id),
+    recipe_id TEXT NOT NULL,
+    pipeline_id TEXT,
+    stage TEXT NOT NULL,
+    bundle_dir TEXT,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    submitted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT,
+    elapsed TEXT,
+    exit_code TEXT,
+    error TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_recipe ON tasks(recipe_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_experiment ON tasks(experiment_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_slurm_jobs_experiment ON slurm_jobs(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_slurm_jobs_recipe ON slurm_jobs(recipe_id);
+CREATE INDEX IF NOT EXISTS idx_slurm_jobs_job_id ON slurm_jobs(job_id);
+CREATE INDEX IF NOT EXISTS idx_slurm_jobs_status ON slurm_jobs(status);

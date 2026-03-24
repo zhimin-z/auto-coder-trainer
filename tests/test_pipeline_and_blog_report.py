@@ -519,7 +519,7 @@ class TestPipeline:
         )
 
         captured = capsys.readouterr().out
-        assert "External execution is still pending." in captured
+        assert "training is running asynchronously" in captured
         assert not (report_dir / "report.md").exists()
 
 

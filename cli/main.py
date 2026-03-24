@@ -58,6 +58,7 @@ def main():
     status_parser = subparsers.add_parser("status", help="Summarize tracked experiments and open tasks")
     status_parser.add_argument("--recipe-id", type=str, help="Limit the summary to a recipe")
     status_parser.add_argument("--open-only", action="store_true", help="Show only open tasks")
+    status_parser.add_argument("--slurm", action="store_true", help="Include live SLURM job status (polls sacct)")
     status_parser.add_argument("--output", type=str, help="Optional path to save the status report")
 
     # rerun
@@ -79,6 +80,15 @@ def main():
     pipeline_parser.add_argument("--report-format", choices=["blog", "markdown", "latex"], default="blog")
     pipeline_parser.add_argument("--max-iterations", type=int, default=3, help="Max train→judge loops")
     pipeline_parser.add_argument("--dry-run", action="store_true", help="Validate without training")
+
+    # sync
+    sync_parser = subparsers.add_parser(
+        "sync",
+        help="Poll SLURM jobs and auto-import completed results",
+    )
+    sync_parser.add_argument("--recipe-id", type=str, help="Limit sync to a specific recipe")
+    sync_parser.add_argument("--dry-run", action="store_true", help="Check status without importing")
+    sync_parser.add_argument("--report-format", choices=["blog", "markdown", "latex"], default="blog")
 
     args = parser.parse_args()
 
@@ -108,6 +118,9 @@ def main():
     elif args.command == "pipeline":
         from cli.pipeline import run_pipeline
         run_pipeline(args)
+    elif args.command == "sync":
+        from cli.sync import run_sync
+        run_sync(args)
 
 
 if __name__ == "__main__":
