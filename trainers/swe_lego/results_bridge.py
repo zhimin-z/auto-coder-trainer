@@ -201,12 +201,36 @@ def import_results(
     }
 
 
+def _simple_verdict(results: dict[str, Any]) -> str:
+    """Fallback verdict based on resolve_rate thresholds."""
+    if results["eval_results"]:
+        best_rate = max(
+            er["metrics"].get("resolve_rate", 0) for er in results["eval_results"]
+        )
+        if best_rate >= 0.3:
+            return "strong"
+        elif best_rate >= 0.15:
+            return "moderate"
+        elif best_rate > 0:
+            return "weak"
+        else:
+            return "failed"
+    elif results["train_result"]["status"] != "success":
+        return "train_failed"
+    return "unknown"
+
+
 def import_and_judge(
     bundle_dir: str | Path,
     recipe_id: str,
     experiment_id: str | None = None,
+    result_db: Any = None,
 ) -> dict[str, Any]:
-    """Full import pipeline: parse results, store in DB, run judge, generate report.
+    """Full import pipeline: parse results, run judge, generate report.
+
+    When *result_db* is provided, uses :class:`ExperimentJudge` for a
+    rigorous verdict and stores results in the DB.  Otherwise falls back
+    to simple resolve-rate thresholds.
 
     Returns dict with ``experiment_id``, ``verdict``, and ``report_path``.
     """
@@ -218,35 +242,40 @@ def import_and_judge(
 
     results = import_results(bundle_dir, recipe_id, experiment_id)
 
-    # Determine verdict from eval results
-    verdict = "unknown"
-    if results["eval_results"]:
-        best_rate = max(
-            er["metrics"].get("resolve_rate", 0) for er in results["eval_results"]
+    # Try real ExperimentJudge first, fall back to simple thresholds
+    verdict = _simple_verdict(results)
+    judge_result = None
+    try:
+        from judge.judge import ExperimentJudge
+
+        judge = ExperimentJudge(result_db=result_db)
+        judge_result = judge.judge(recipe_id, results)
+        verdict = judge_result.verdict.value
+        logger.info(
+            "ExperimentJudge verdict for %s: %s (%s)",
+            experiment_id, verdict, judge_result.reasoning,
         )
-        if best_rate >= 0.3:
-            verdict = "strong"
-        elif best_rate >= 0.15:
-            verdict = "moderate"
-        elif best_rate > 0:
-            verdict = "weak"
-        else:
-            verdict = "failed"
-    elif results["train_result"]["status"] != "success":
-        verdict = "train_failed"
+    except Exception as exc:
+        logger.warning(
+            "ExperimentJudge unavailable, using simple verdict: %s", exc,
+        )
 
     # Write report
     report_dir = bundle_dir / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / f"{experiment_id}_report.json"
 
-    report = {
+    report: dict[str, Any] = {
         "experiment_id": experiment_id,
         "recipe_id": recipe_id,
         "verdict": verdict,
         "train_result": results["train_result"],
         "eval_results": results["eval_results"],
     }
+    if judge_result is not None:
+        report["judge_checks"] = judge_result.checks
+        report["judge_reasoning"] = judge_result.reasoning
+        report["judge_suggestions"] = judge_result.suggestions
     report_path.write_text(json.dumps(report, indent=2, default=str))
 
     logger.info(

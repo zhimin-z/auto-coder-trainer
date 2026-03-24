@@ -13,13 +13,16 @@ from typing import Any
 
 import yaml
 
+from trainers.swe_lego.model_registry import ModelProfile, resolve_model_profile
+
 
 # ---------------------------------------------------------------------------
 # Paths relative to the trainer root
 # ---------------------------------------------------------------------------
 
 _SWE_LEGO_SUBDIR = Path("trainers/swe_lego/SWE-Lego")
-_LLAMA_FACTORY_SUBDIR = _SWE_LEGO_SUBDIR / "LLaMA-Factory-0.9.4.dev0"
+_DEFAULT_LLAMA_FACTORY_VERSION = "0.9.4.dev0"
+_LLAMA_FACTORY_SUBDIR = _SWE_LEGO_SUBDIR / f"LLaMA-Factory-{_DEFAULT_LLAMA_FACTORY_VERSION}"
 _DEEPSPEED_DIR = "examples/deepspeed"
 
 _DS_CONFIGS: dict[str, str] = {
@@ -79,6 +82,12 @@ def build_swe_lego_launcher_bundle(
         "ACT_GPU_COUNT": gpu_count,
     }
 
+    # Resolve model profile for dependency checks
+    model_profile = resolve_model_profile(
+        model_cfg.get("base", "Qwen/Qwen3-8B"),
+        overrides=training_params.get("model_profile_overrides"),
+    )
+
     warnings: list[str] = []
     if not data_cfg.get("sources"):
         warnings.append(
@@ -95,6 +104,9 @@ def build_swe_lego_launcher_bundle(
             "ds_z2_offload_config.json is intended for single-GPU. "
             "Consider z3 for multi-GPU setups."
         )
+
+    # Dependency version warnings based on model profile
+    warnings.extend(_check_dep_versions(model_profile))
 
     yaml_file = bundle_dir / "train_config.yaml"
     dataset_info_file = bundle_dir / "dataset_info_patch.json"
@@ -145,11 +157,27 @@ def build_swe_lego_launcher_bundle(
         # Internal data carried for write step
         "_train_config_dict": train_config,
         "_dataset_info_dict": dataset_info,
+        "_model_config": model_cfg,
+        "_data_config": data_cfg,
+        "_training_params": training_params,
+        "_model_profile_overrides": training_params.get("model_profile_overrides"),
     }
 
 
 def write_swe_lego_launcher_bundle(bundle: dict[str, Any]) -> dict[str, str]:
-    """Persist a SWE-Lego launch bundle to disk."""
+    """Persist a SWE-Lego launch bundle to disk.
+
+    Generates all 5 pipeline scripts required by the SLURM pipeline:
+    ``run.sh``, ``serve_and_infer.sh``, ``eval.sh``,
+    ``verifier_train.sh``, and ``tts.sh``.
+    """
+    from trainers.swe_lego.inference import build_serve_and_infer_script, build_eval_script
+    from trainers.swe_lego.verifier import (
+        build_verifier_train_config,
+        build_verifier_train_bundle,
+        build_tts_pipeline_script,
+    )
+
     bundle_dir = Path(bundle["artifact_dir"])
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
@@ -167,12 +195,86 @@ def write_swe_lego_launcher_bundle(bundle: dict[str, Any]) -> dict[str, str]:
     )
     env_path.write_text(_render_env(bundle))
     run_path.write_text(_render_run_script(bundle))
+    run_path.chmod(0o755)
+
+    # --- Generate inference pipeline scripts ---
+    # Checkpoint path is unknown at generation time; use env var placeholder
+    # that the SLURM train job will resolve at runtime.
+    recipe_id = bundle.get("recipe_id", "unknown")
+    default_checkpoint = str(bundle_dir / "saves" / f"SWE-Lego-{recipe_id}")
+    checkpoint_placeholder = f"${{ACT_CHECKPOINT_PATH:-{default_checkpoint}}}"
+
+    model_base = bundle.get("_model_config", {}).get("base", "Qwen/Qwen3-8B")
+    profile: ModelProfile = resolve_model_profile(
+        model_base,
+        overrides=bundle.get("_model_profile_overrides"),
+    )
+    # Derive a short model name for OpenHands output path (e.g. "Qwen3.5-9B")
+    model_short_name = model_base.split("/")[-1] if "/" in model_base else model_base
+
+    serve_and_infer_path = bundle_dir / "serve_and_infer.sh"
+    serve_and_infer_path.write_text(
+        build_serve_and_infer_script(
+            checkpoint_path=checkpoint_placeholder,
+            bundle_dir=str(bundle_dir),
+            max_model_len=profile.max_model_len,
+            model_name=model_base,
+            openhands_model_config=profile.openhands_model_config,
+            vllm_extra_flags=profile.vllm_extra_flags,
+        )
+    )
+    serve_and_infer_path.chmod(0o755)
+
+    eval_path = bundle_dir / "eval.sh"
+    eval_path.write_text(
+        build_eval_script(
+            bundle_dir=str(bundle_dir),
+            model_short_name=model_short_name,
+        )
+    )
+    eval_path.chmod(0o755)
+
+    # --- Generate verifier training script ---
+    model_cfg = bundle.get("_model_config", {})
+    training_params = bundle.get("_training_params", {})
+    data_cfg = bundle.get("_data_config", {})
+    verifier_config = build_verifier_train_config(
+        recipe_id=recipe_id,
+        model_cfg=model_cfg,
+        data_cfg=data_cfg,
+        training_params=training_params,
+        bundle_dir=str(bundle_dir),
+    )
+    verifier_bundle = build_verifier_train_bundle(
+        {"recipe_id": recipe_id, **verifier_config},
+        output_dir=str(bundle_dir),
+    )
+    verifier_train_path = bundle_dir / "verifier_train.sh"
+    verifier_train_path.write_text(verifier_bundle["run_script_content"])
+    verifier_train_path.chmod(0o755)
+
+    # Also write verifier YAML config
+    verifier_yaml_path = Path(verifier_bundle["files"]["yaml_config"])
+    verifier_yaml_path.parent.mkdir(parents=True, exist_ok=True)
+    verifier_yaml_path.write_text(verifier_bundle["yaml_content"])
+
+    # --- Generate TTS pipeline script ---
+    verifier_model_placeholder = (
+        f"${{ACT_VERIFIER_MODEL_PATH:-{bundle_dir / 'verifier' / 'saves' / f'{recipe_id}-verifier'}}}"
+    )
+    tts_path = bundle_dir / "tts.sh"
+    tts_path.write_text(
+        build_tts_pipeline_script(
+            verifier_model_path=verifier_model_placeholder,
+            policy_output_dir=checkpoint_placeholder,
+            bundle_dir=str(bundle_dir),
+        )
+    )
+    tts_path.chmod(0o755)
 
     # Strip internal keys before persisting the JSON manifest
     serializable = {k: v for k, v in bundle.items() if not k.startswith("_")}
     launcher_path.write_text(json.dumps(serializable, indent=2) + "\n")
-
-    run_path.chmod(0o755)
 
     return {
         "bundle_dir": str(bundle_dir),
@@ -181,6 +283,10 @@ def write_swe_lego_launcher_bundle(bundle: dict[str, Any]) -> dict[str, str]:
         "env": str(env_path),
         "run_script": str(run_path),
         "launcher_json": str(launcher_path),
+        "serve_and_infer_script": str(serve_and_infer_path),
+        "eval_script": str(eval_path),
+        "verifier_train_script": str(verifier_train_path),
+        "tts_script": str(tts_path),
     }
 
 
@@ -367,3 +473,52 @@ def _default_gpu_count(budget: dict[str, Any]) -> str:
         if maybe_count.isdigit():
             return maybe_count
     return "1"
+
+
+def _check_dep_versions(profile: ModelProfile) -> list[str]:
+    """Check installed dependency versions against model profile requirements.
+
+    Returns a list of warning strings for unmet dependencies.
+    """
+    warnings: list[str] = []
+    _DEP_CHECKS = [
+        ("transformers", profile.min_llamafactory_version, "LLaMA-Factory"),
+        ("vllm", profile.min_vllm_version, "vLLM"),
+    ]
+    # Only check transformers (always available) and vllm (optional)
+    try:
+        import importlib.metadata as _meta
+    except ImportError:
+        return warnings
+
+    for pkg, check_field, label in [
+        ("transformers", "min_llamafactory_version", "LLaMA-Factory"),
+    ]:
+        # For LLaMA-Factory, we check the transformers version as a proxy
+        # since LLaMA-Factory 0.9.5 requires transformers >= 4.52.0
+        if profile.min_llamafactory_version > "0.9.4":
+            try:
+                ver = _meta.version("transformers")
+                if ver < "4.52.0":
+                    warnings.append(
+                        f"Qwen3.5 requires transformers >= 4.52.0 (installed: {ver}). "
+                        f"Upgrade with: pip install 'transformers>=4.52.0'"
+                    )
+            except _meta.PackageNotFoundError:
+                pass
+
+    if profile.min_vllm_version > "0.16.0":
+        try:
+            ver = _meta.version("vllm")
+            if ver < profile.min_vllm_version:
+                warnings.append(
+                    f"Qwen3.5 requires vllm >= {profile.min_vllm_version} (installed: {ver}). "
+                    f"Upgrade with: pip install 'vllm>={profile.min_vllm_version}'"
+                )
+        except _meta.PackageNotFoundError:
+            warnings.append(
+                f"vLLM not installed. Qwen3.5 inference requires vllm >= {profile.min_vllm_version}. "
+                f"Install with: pip install 'vllm>={profile.min_vllm_version}'"
+            )
+
+    return warnings
