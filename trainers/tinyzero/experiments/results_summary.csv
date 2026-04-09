@@ -21,27 +21,32 @@
 06,模型规模缩放,exp06_3B,16.2%,82.9%,OK,最佳规模
 07,KL 敏感性,exp07_grpo_kl0p001,16.2%,81.7%,OK,
 07,KL 敏感性,exp07_grpo_kl0p01,16.2%,82.6%,OK,略好
-08,Rollout N,exp08_n2,16.2%,82.7%,OK,
-08,Rollout N,exp08_n4,16.2%,82.5%,OK,最佳性价比
-08,Rollout N,exp08_n8,16.2%,83.5%,OK,n=8 仍然有效
-08,Rollout N,exp08_n16,-,-,TIMEOUT,"5h 仍不够 n=16 15步约需3.5h"
+08,Rollout N,exp08_n2,16.2%,83.5%,OK,
+08,Rollout N,exp08_n4,16.2%,82.2%,OK,最佳性价比
+08,Rollout N,exp08_n8,16.2%,83.7%,OK,n=8 最佳
+08,Rollout N,exp08_n16,-,-,TIMEOUT,"5h 不够 n=16 15步约需3.5h"
 09,温度,exp09_temp0p6,16.2%,80.6%,OK,
 09,温度,exp09_temp0p8,16.2%,83.3%,OK,最佳温度
 09,温度,exp09_temp1p0,16.2%,82.1%,OK,
 09,温度,exp09_temp1p2,16.2%,75.9%,OK,"T=1.2 高熵 收敛差 clip_ratio=0.7"
-10,LoRA vs Full,exp10_full,16.2%,82.4%,OK,Full fine-tune 跑通
-10,LoRA vs Full,exp10_lora_r8,-,-,FAILED,"Key 'lora' is not in struct Hydra 配置缺 LoRA 键"
+10,LoRA vs Full,exp10_full,-,-,CANCELLED,"verl-agent2 极慢 2.5h 仍在初始化 被 preemption 取消"
+10,LoRA vs Full,exp10_lora_r8,-,-,CANCELLED,同上 exp10_full 未完成
 11,综合缩放,exp11_0.5B_d1000,0.7%,0.0%,OK,0.5B 模型无法学会
 11,综合缩放,exp11_3B_dfull,16.2%,81.3%,OK,
 12,Pass@K,exp12_grpo,16.2%,81.7%,OK,"save_freq=-1 修复 OOM 30步完整跑通"
-13,1-shot RLVR,exp13_1shot,-,-,FAILED,"AssertionError gsm8k_train_1.parquet 数据文件问题"
+13,1-shot RLVR,exp13_1shot,1.9%,1.9%,OK,1.5B 模型 1 条数据学不会
+13,1-shot RLVR,exp13_2shot,1.9%,1.9%,OK,1.5B 2条数据同样
+13,1-shot RLVR,exp13_5shot,1.9%,1.9%,OK,
+13,1-shot RLVR,exp13_10shot,1.9%,1.9%,OK,
+13,1-shot RLVR,exp13_50shot,1.9%,1.9%,OK,
+13,1-shot RLVR,exp13_100shot,1.9%,1.9%,OK,1.5B+30步 不足以从少样本学会
 14,蒸馏 vs RL,exp14_grpo_3B,16.2%,82.3%,OK,GRPO RL 跑通
-14,蒸馏 vs RL,exp14_distill_3B,-,-,FAILED,"AttributeError: DataFrame object has no attribute 'tolist' SFT trainer 代码 bug"
+14,蒸馏 vs RL,exp14_distill_3B,-,-,FAILED,"SFT TypeError: batch contains NoneType 预处理数据中有空值"
 15,自我反思,exp15_base,16.2%,81.5%,OK,
 16,多模态 fallback,exp16_text_fallback,16.2%,82.3%,OK,
 17,多轮对话,exp17_single_turn,16.2%,81.6%,OK,
 17,多轮对话,exp17_multi_turn,16.2%,80.1%,OK,
-18,能力保留,exp18_grpo,-,-,OOM,"n=4 + save_freq=1 导致 checkpoint 保存时 CUDA OOM"
+18,能力保留,exp18_grpo,16.2%,81.3%,OK,"save_freq=-1 修复OOM step10:71.2% step20:81.3% step30:80.6%"
 19,成本分析 (PPO),exp19_tinyzero_ppo,-,-,FAILED,"NotImplementedError PPO validate 方法未实现"
 20,思维链保留,exp20_think_train,16.2%,82.0%,OK,
 21,奖励思考风格,exp21_result_only,16.2%,82.1%,OK,
