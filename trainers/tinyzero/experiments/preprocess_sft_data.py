@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Preprocess GSM8K parquet for SFT training (exp14).
+Preprocess parquet data for SFT training.
 
-The original gsm8k_train.parquet has:
+The input parquet is expected to have:
   - prompt: numpy array of [{role, content}] dicts (chat format)
   - extra_info: dict with 'answer' key
 
@@ -10,11 +10,15 @@ The SFT trainer expects:
   - prompt: plain string
   - answer: plain string (response)
 
-This script flattens the data and saves as gsm8k_sft_train.parquet.
+This script flattens the data and saves as a flat parquet with
+just 'prompt' and 'answer' columns.
+
+Usage:
+  python preprocess_sft_data.py --input gsm8k_train.parquet --output gsm8k_sft_train.parquet
 """
+import argparse
 import pandas as pd
 import numpy as np
-import sys
 import os
 
 def preprocess(input_path, output_path):
@@ -68,7 +72,14 @@ def preprocess(input_path, output_path):
     print(f"Done! Saved {len(out_df)} rows to {output_path}")
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Preprocess parquet data for SFT training.')
+    parser.add_argument('--input', default='gsm8k_train.parquet',
+                        help='Input parquet filename (default: gsm8k_train.parquet)')
+    parser.add_argument('--output', default='gsm8k_sft_train.parquet',
+                        help='Output parquet filename (default: gsm8k_sft_train.parquet)')
+    args = parser.parse_args()
+
     workdir = os.environ.get('WORKDIR', '/scratch/cy2668/auto-coder-trainer')
-    input_path = os.path.join(workdir, 'data/tinyzero/gsm8k_train.parquet')
-    output_path = os.path.join(workdir, 'data/tinyzero/gsm8k_sft_train.parquet')
+    input_path = os.path.join(workdir, 'data/tinyzero', args.input)
+    output_path = os.path.join(workdir, 'data/tinyzero', args.output)
     preprocess(input_path, output_path)

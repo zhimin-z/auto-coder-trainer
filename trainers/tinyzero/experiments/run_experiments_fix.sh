@@ -127,9 +127,9 @@ run_grpo() {
 # Helper: run SFT (for distillation exp14) — fixed version
 # =============================================================================
 run_sft() {
-    local name=$1 model=$2 train=$3
-    local bs=${4:-4} lr=${5:-1e-5} epochs=${6:-3}
-    shift 6 2>/dev/null || true
+    local name=$1 model=$2 train=$3 val=${4:-$GSM_TEST}
+    local bs=${5:-4} lr=${6:-1e-5} epochs=${7:-3}
+    shift 7 2>/dev/null || true
     local extra="$*"
 
     local out="$OUTPUT_DIR/$name"
@@ -139,12 +139,13 @@ run_sft() {
     echo "================================================================"
     echo " SFT: $name"
     echo " Model: $model  BS: $bs  LR: $lr  Epochs: $epochs"
+    echo " Val: $val"
     echo "================================================================"
 
     torchrun --standalone --nnodes=1 --nproc_per_node=1 \
         -m verl.trainer.fsdp_sft_trainer \
         data.train_files="$train" \
-        data.val_files="$GSM_TEST" \
+        data.val_files="$val" \
         data.prompt_key=prompt \
         data.response_key=answer \
         data.max_length=2048 \
@@ -258,7 +259,8 @@ print(json.dumps({'pass_at_k': $K, 'status': 'placeholder — run generation + s
         BS=$((BS > 0 ? BS : 1))
         echo "[exp13] SIZE=$SIZE BS=$BS"
         run_grpo "exp13_${SIZE}shot" "$M_15B" "$DATA" "$GSM_TEST" \
-            $BS 1 4 1e-6 1 1.0 0.001 0.2 512 512 False
+            $BS 1 4 1e-6 1 1.0 0.001 0.2 512 512 False \
+            actor_rollout_ref.actor.ppo_mini_batch_size=$BS
     done
     ;;
 
@@ -269,12 +271,18 @@ print(json.dumps({'pass_at_k': $K, 'status': 'placeholder — run generation + s
         32 1 4 1e-6 1 1.0 0.001 0.2 512 512 False
 
     # 14b: SFT distillation using preprocessed data
-    if [ -f "$GSM_SFT_TRAIN" ]; then
-        run_sft "exp14_distill_3B" "$M_3B" "$GSM_SFT_TRAIN" \
+    # Preprocess both train and test for SFT (test needs 'answer' column too)
+    python3 $EXP_SCRIPTS/preprocess_sft_data.py
+    python3 $EXP_SCRIPTS/preprocess_sft_data.py --input gsm8k_test.parquet --output gsm8k_sft_test.parquet
+
+    GSM_SFT_TEST="$DATA_DIR/gsm8k_sft_test.parquet"
+
+    if [ -f "$GSM_SFT_TRAIN" ] && [ -f "$GSM_SFT_TEST" ]; then
+        run_sft "exp14_distill_3B" "$M_3B" "$GSM_SFT_TRAIN" "$GSM_SFT_TEST" \
             4 1e-5 3
     else
-        echo "[WARN] $GSM_SFT_TRAIN not found — skipping SFT distillation"
-        echo "Run: python3 $EXP_SCRIPTS/preprocess_sft_data.py to create it"
+        echo "[WARN] SFT data files not found — skipping SFT distillation"
+        echo "Run: python3 $EXP_SCRIPTS/preprocess_sft_data.py to create them"
     fi
 
     # 14c: GRPO + distillation hybrid
@@ -282,12 +290,12 @@ print(json.dumps({'pass_at_k': $K, 'status': 'placeholder — run generation + s
         32 1 4 1e-6 1 1.0 0.001 0.2 512 512 False
     ;;
 
-# ---- Experiment 18: Capability Preservation (FIXED: save_freq=10 instead of 1) ----
+# ---- Experiment 18: Capability Preservation (FIXED: save_freq=-1 to avoid OOM) ----
 18)
-    # Train GRPO model — save every 10 steps instead of every step to avoid OOM
+    # Train GRPO model — completely disable checkpoint saving to avoid OOM
     run_grpo "exp18_grpo" "$M_3B" "$GSM_TRAIN" "$GSM_TEST" \
         32 1 4 1e-6 1 1.0 0.001 0.2 512 512 False \
-        trainer.save_freq=10
+        trainer.save_freq=-1
 
     # Benchmark evaluation placeholder
     echo "[exp18] Capability preservation evaluation..."

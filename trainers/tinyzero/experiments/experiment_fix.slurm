@@ -44,7 +44,8 @@ export PYTHONPATH=\${PYTHONPATH:-}
 if [ "$EXP_ID" = "14" ]; then
     echo "[EXP] Preprocessing SFT data for exp14..."
     python3 $WORKDIR/trainers/tinyzero/experiments/preprocess_sft_data.py
-    echo "[EXP] SFT data preprocessed."
+    python3 $WORKDIR/trainers/tinyzero/experiments/preprocess_sft_data.py --input gsm8k_test.parquet --output gsm8k_sft_test.parquet
+    echo "[EXP] SFT data preprocessed (train + test)."
 fi
 
 # Source the fixed experiment runner
