@@ -121,11 +121,25 @@ For the 21 reproducible TinyZero/veRL experiments described in
 [`TinyZero_实验方案.md`](TinyZero_实验方案.md) (algorithm comparison,
 data scaling, Pass@k, distillation, multi-modal, etc.), see the experiment
 index at [`recipes/experiments/README.md`](recipes/experiments/README.md).
-Each experiment has a runnable recipe, a status marker (✅ verified / ⏳
-unverified), a minimum-hardware bucket, and a list of any blocking
-dependencies. Currently **exp01 (GRPO baseline) is verified end-to-end**;
-the other 20 generate valid bundles but need additional data prep scripts,
-evaluators, or launcher work to run fully.
+Each experiment has a runnable recipe, a status marker, a minimum-hardware
+bucket, and a list of remaining blockers.
+
+Current verification state (see the index for per-build evidence):
+
+- **End-to-end on real GPU**: exp01 (GRPO/GSM8K baseline), exp13 (1-shot
+  RLVR, 100 epochs × 1 sample on 1.5B), exp19-smoke (PPO + Countdown +
+  custom reward, 0.5B, 8 steps), exp04-smoke (two-phase
+  Countdown→GSM8K with checkpoint hand-off).
+- **POC verified (recipe schema-validates and the launcher emits the
+  correct hydra/env, no real training observed)**: the remaining 17
+  experiments. Many ship a smoke recipe alongside the full reproduction
+  recipe so the GRPO/PPO/LoRA/FP8 dispatch can be checked in seconds.
+
+The infrastructure that landed for these verifications — sweep wrapper,
+two-phase resume wrapper, custom-reward sentinel, FP8/LoRA hydra mapping,
+`ACT_PARAM_<KEY>` env-var passthrough — is documented in the
+per-experiment notes under
+[`recipes/experiments/README.md`](recipes/experiments/README.md).
 
 ---
 
@@ -450,7 +464,18 @@ auto-coder-trainer/
 │   ├── train/                    #   /train
 │   └── report/                   #   /report
 │
-├── tests/                        # Test suite (57 tests)
+├── scripts/                      # Data prep + orchestration helpers
+│   ├── make_gsm8k_data.py        #   GSM8K → verl parquet
+│   ├── make_countdown_data.py    #   Countdown → verl parquet
+│   ├── make_toy_data.py          #   smoke-test arithmetic dataset
+│   ├── reward_countdown.py       #   custom reward: Countdown
+│   ├── reward_gsm8k_partial.py   #   custom reward: GSM8K partial credit
+│   ├── reward_gsm8k_process.py   #   custom reward: GSM8K + step shaping
+│   ├── reward_thinking.py        #   custom reward: 4-mode thinking shaping
+│   ├── run_ablation_sweep.py     #   ablation sweep (single + cartesian)
+│   └── run_two_phase_transfer.py #   phase-1 → checkpoint → phase-2 wrapper
+│
+├── tests/                        # Test suite
 ├── pyproject.toml                # Package config (Python >= 3.10)
 ├── Makefile                      # Convenience targets
 └── UPSTREAM_INTEGRATION.md       # Upstream integration policy
@@ -495,14 +520,24 @@ python -m pytest tests/test_pipeline_and_blog_report.py -v
 - [x] **Blog-style report generator** — LoRA Insights-inspired experiment diary
 - [x] Experiment judge (5 checks, 4 verdicts, auto-decision loop)
 - [x] SFT trainer (TRL backend, Full/LoRA/QLoRA)
-- [x] RL/GRPO trainer (veRL backend, 4 reward types)
+- [x] RL/GRPO trainer (veRL 0.7.1 backend, 4 reward types)
+- [x] PPO trainer with critic (veRL `main_ppo`, validated on Countdown smoke)
 - [x] Distillation trainer (trajectory SFT + optional DPO refinement)
 - [x] SWE-bench & pass@k evaluators
 - [x] Upstream launchers (TinyZero, Open-R1, Agent Distillation, REDI)
 - [x] Persistent experiment recovery (SQLite DB, task ledgers, execution plans)
 - [x] Prompt cache infrastructure (builder, monitor, compaction, 6 rules)
-- [x] 57 tests passing
+- [x] **TinyZero experiment library** — 21 recipes, 4 verified end-to-end on
+      GPU, 17 verified at the bundle/sweep level. See
+      [`recipes/experiments/README.md`](recipes/experiments/README.md).
+- [x] **Sweep wrapper** ([`scripts/run_ablation_sweep.py`](scripts/run_ablation_sweep.py))
+      — single-axis and `--cartesian` (multi-axis) ablation sweeps.
+- [x] **Two-phase resume wrapper**
+      ([`scripts/run_two_phase_transfer.py`](scripts/run_two_phase_transfer.py))
+      — checkpoint hand-off for transfer experiments (exp04).
+- [x] Tests: tinyzero launcher + bridge suites green (8 tests)
 - [ ] Case studies and reproductions
+- [ ] Pre-existing ruff warnings under `trainers/upstream/` and `cli/train.py`
 
 ---
 

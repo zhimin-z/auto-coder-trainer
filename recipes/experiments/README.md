@@ -1,46 +1,72 @@
 # TinyZero Experiment Index
 
 21 research experiments from [`TinyZero_实验方案.md`](../../TinyZero_实验方案.md), each
-realised as a runnable recipe. **Reading order**: status table → status legend →
-5-step template → per-experiment notes.
+realised as a runnable recipe. **Reading order**: at-a-glance summary →
+status table → status legend → 5-step template → per-experiment notes.
 
 All recipes have been validated against [`recipe.schema.json`](../schema/recipe.schema.json)
-and pass `act train --dry-run`. Whether they actually train end-to-end on your
-hardware depends on the **status** column — read it before investing GPU time.
+and pass `act train --dry-run`. Whether they actually train end-to-end on
+your hardware depends on the **status** column — read it before investing
+GPU time.
+
+---
+
+## At a glance
+
+| | Count | Builds |
+|---|---|---|
+| **End-to-end on real GPU** (DB has `success` row, train log archived) | 4 | exp01, exp13, exp19-smoke, exp04-smoke |
+| **POC verified** (sweep + bundle gen + hydra/env spot-check) | 17 | exp08, exp09, exp03, exp06, exp11, exp05, exp21, exp07, exp02, exp10, exp12, exp18, exp15, exp17, exp20, exp14, exp16 |
+| **Total** | 21 | — |
+
+What "POC verified" rules out: schema bugs, sweep wrapper regressions,
+launcher dispatch errors (RL vs GRPO, FP8, LoRA, multi-GPU, custom rewards,
+two-phase resume, env passthrough). What it does **not** rule out: any
+training-runtime issue (verl 0.7.x edge cases, OOM at full scale,
+data-prep mismatches, evaluators that don't yet exist). The end-to-end
+verifications cover the remaining runtime risk for the GRPO and PPO
+backends specifically.
+
+For full evidence (commands run, hydra snippets, GPU-mem peaks, wall
+times), see [Per-experiment notes](#per-experiment-notes) below.
 
 ---
 
 ## Status table
 
-Sorted by **build order** — the order we recommend tackling these in. The `Orig
-#` column is the experiment number from
+Sorted by **build order**. The `Orig #` column is the experiment number from
 [`TinyZero_实验方案.md`](../../TinyZero_实验方案.md). See
 [Recommended build order](#recommended-build-order) below for the rationale
 behind each group.
 
-| Build | Orig # | Recipe | Algorithm · Model · Data | Min. hardware | Status | Blocking dependencies |
-|-------|--------|--------|--------------------------|---------------|--------|------------------------|
-| **1** | 1 | [exp01-grpo-gsm8k](exp01-grpo-gsm8k.recipe.json) | GRPO · 0.5B · GSM8K (64) | 1 × A100 80GB | ✅ verified | — |
-| **2** | 13 | [exp13-one-shot-rlvr](exp13-one-shot-rlvr.recipe.json) | GRPO · 1.5B · GSM8K (1–100 samples) | 1 × A100 80GB | ✅ verified | 100 epochs × 1 sample × group_size=16 in ~29 min on one A100 80GB; reaches `critic/score/mean=1.0` (memorized) by step ~96 |
-| **3** | 19 | [exp19-tinyzero-replication](exp19-tinyzero-replication.recipe.json) (full) / [exp19-tinyzero-replication-smoke](exp19-tinyzero-replication-smoke.recipe.json) (smoke) | PPO · 3B · Countdown (full) / PPO · 0.5B · Countdown 8 steps (smoke) | 1 × A100 80GB | ✅ pipeline verified (smoke) · ⏳ full unverified | smoke (0.5B, 8 PPO steps, 32 batch) finishes in ~88 s with peak 19 GB; PPO+critic+vLLM+`reward_countdown.compute_score` chain confirmed working. Full 3B run still untested (estimated ~24 h on 1 × A100 80GB) |
-| **4** | 4 | [exp04-cross-task-transfer](exp04-cross-task-transfer.recipe.json) (full) / [phase1](exp04-cross-task-transfer-smoke-phase1.recipe.json) + [phase2](exp04-cross-task-transfer-smoke-phase2.recipe.json) (smoke) | GRPO · 3B · Countdown→GSM8K (full) / GRPO · 0.5B · Countdown 4 steps → GSM8K 4 steps from ckpt (smoke) | 1 × A100 80GB | ✅ pipeline verified (smoke) · ⏳ full unverified | smoke proves the two-phase resume hand-off: phase1 saves `global_step_4`, phase2 boots at step 5 and runs through step 8 reading `ACT_RESUME_FROM_PATH` via `trainer.resume_from_path`. ~2.5 min total on one A100 80GB, peak ~12 GB |
-| **5** | 8 | [exp08-rollout-n](exp08-rollout-n.recipe.json) | GRPO · 3B · GSM8K (sweep `group_size` ∈ {2,4,8,16}) | 1 × A100 80GB | ✅ POC verified (sweep wrapper) · ⏳ training unrun | `scripts/run_ablation_sweep.py` materializes 4 variant recipes, each schema-validates and produces its own TinyZero bundle with the correct `actor_rollout_ref.rollout.n` value. Unblocks exp03/06/09/11. |
-| **6** | 9 | [exp09-temperature](exp09-temperature.recipe.json) | GRPO · 3B · GSM8K (sweep `temperature` ∈ {0.6, 0.8, 1.0, 1.2}) | 1 × A100 80GB | ✅ POC verified (sweep wrapper) · ⏳ training unrun | 0 new code — sweep wrapper from build 5 produces 4 bundles, each with correct `actor_rollout_ref.rollout.temperature` |
-| **7** | 3 | [exp03-data-scaling](exp03-data-scaling.recipe.json) | GRPO · 3B · GSM8K (sweep `dataset.total_samples` ∈ {100,500,1K,2K,5K,8K}) | 1 × A100 80GB | ✅ POC verified (sweep wrapper) · ⏳ training unrun | exercises dotted path on `dataset.*` (not just `trainer.params.*`); 6 variants schema-valid |
-| **8** | 6 | [exp06-model-scale](exp06-model-scale.recipe.json) | GRPO · 0.5B–7B · GSM8K (sweep `model.base`) | 1 × A100 80GB (≤3B) / 2 × A100 80GB (7B) | ✅ POC verified (sweep wrapper) · ⏳ training unrun | exercises slug for HF model IDs containing `/`; 4 variants each set `actor_rollout_ref.model.path` correctly |
-| **9** | 11 | [exp11-comprehensive-scaling](exp11-comprehensive-scaling.recipe.json) | GRPO · 4 sizes × 6 data points = 24 runs | 1–2 × A100 80GB | ✅ POC verified (cartesian sweep) · ⏳ training unrun | needs `--cartesian` flag added to sweep wrapper; 24 variants generated, sample corner cell (7B + 8K samples) schema-validates and produces correct hydra overrides |
-| **10** | 5 | [exp05-reward-design](exp05-reward-design.recipe.json) | GRPO · 3B · GSM8K (sweep `custom_reward_function` ∈ {binary, partial, process}) | 1 × A100 80GB | ✅ POC verified (sweep wrapper) · ⏳ training unrun | reuses exp08's sweep wrapper; new pieces are `scripts/reward_gsm8k_partial.py` (1.0/0.3/0.0) + `scripts/reward_gsm8k_process.py` (binary + per-step shaping ≤ 0.3); launcher now treats `"binary"`/`""`/`"builtin"`/`"default"` as a sentinel to fall back to verl's built-in reward. Unblocks exp21. |
-| **11** | 21 | [exp21-reward-shaping-thinking](exp21-reward-shaping-thinking.recipe.json) | GRPO · 3B · GSM8K (sweep 4 thinking styles) | 1 × A100 80GB | ✅ POC verified (sweep wrapper) · ⏳ training unrun | sweeps `trainer.params.thinking_reward_style`; one shared `scripts/reward_thinking.py` switches between 4 modes via `ACT_PARAM_<KEY>` env var (launcher now auto-exports every string `trainer.params` value) |
-| **12** | 7 | [exp07-kl-sensitivity](exp07-kl-sensitivity.recipe.json) | rl(PPO)/grpo · 3B · GSM8K (cartesian 2 × 4 = 8 cells) | 1 × A100 80GB | ✅ POC verified (cartesian sweep across `trainer.type` + `kl_coeff`) · ⏳ training unrun | rl→gae+critic, grpo→grpo+no critic; both branches schema-validate. RLOO/REMAX would need schema enum + launcher branches (not done). |
-| **13** | 2 | [exp02-fp8-quantization](exp02-fp8-quantization.recipe.json) | GRPO · 7B · GSM8K (cartesian `fp8_rollout` × `fp8_actor` = 4 cells) | 1 × A100 80GB | ✅ POC verified (sweep + launcher FP8 mapping) · ⏳ training unrun | launcher now maps `fp8_rollout=True → rollout.dtype/quantization=fp8`, `fp8_actor=True → actor.fsdp_config.fp8=True`. The actor side is a best-effort hydra path; whether it actually trains depends on the verl/torch/transformer-engine build. |
-| **14** | 10 | [exp10-lora-vs-full](exp10-lora-vs-full.recipe.json) | GRPO · 7B · GSM8K (cartesian `model.adapter` × `lora_rank` = 6 cells) | 1 × A100 80GB (LoRA) / 2 × A100 80GB (full) | ✅ POC verified (sweep + launcher LoRA mapping) · ⏳ training unrun | launcher writes `actor_rollout_ref.model.lora_rank` from `trainer.params.lora_rank` when `model.adapter=lora`, with `lora_alpha=2×rank` default. `full` always emits `lora_rank=0` so flipping back to baseline cannot inherit a stale rank. qlora not implemented. |
-| **15** | 12 | [exp12-pass-at-k](exp12-pass-at-k.recipe.json) | GRPO · 3B · GSM8K + MATH (no ablation) | 1 × A100 80GB | ✅ POC verified (schema + bundle gen) · ⏳ training & evaluator unrun | recipe schema-validates with two-source dataset (gsm8k + math); pass@k benchmarks land in `eval.benchmarks` enum. **`evaluators/pass_at_k.py` still TODO** for actual k-sample inference + scoring |
-| **16** | 18 | [exp18-capability-retention](exp18-capability-retention.recipe.json) | GRPO + replay · 3B · GSM8K + base evals (sweep `mitigation_strategy` ∈ {none, kl_regularize, sft_mixin, replay_buffer}) | 1 × A100 80GB | ✅ POC verified (sweep wrapper) · ⏳ training & evaluators unrun | sweep generates 4 variants, each exporting `ACT_PARAM_MITIGATION_STRATEGY` for downstream training-loop dispatch. **MMLU/HellaSwag/TruthfulQA/HumanEval evaluators still TODO** |
-| **17** | 15 | [exp15-self-reflection](exp15-self-reflection.recipe.json) | GRPO + post-processing · 3B · GSM8K (sweep `post_processing` ∈ {none, self_correction, verification, beam_search}) | 1 × A100 80GB | ✅ POC verified (sweep wrapper) · ⏳ training unrun | 4 variants, each exporting `ACT_PARAM_POST_PROCESSING`. Inference-time post-processor wrapper is the eval-side TODO |
-| **18** | 17 | [exp17-multiturn-rl](exp17-multiturn-rl.recipe.json) | GRPO · 3B · multi-turn GSM8K (sweep `eval_max_turns` ∈ {1, 2, 5}) | 1 × A100 80GB | ✅ POC verified (sweep wrapper) · ⏳ training & multi-turn data unrun | 3 variants schema-validate; each bundle exports `ACT_PARAM_MULTITURN_SPLIT_STRATEGY=stepwise`. **Multi-turn data prep script still TODO** |
-| **19** | 20 | [exp20-multiturn-thinking](exp20-multiturn-thinking.recipe.json) | GRPO · 3B · GSM8K (sweep `training_data_format` ∈ {single_turn, multiturn, thinking_reward, system_prompt}) | 1 × A100 80GB | ✅ POC verified (sweep wrapper) · ⏳ training unrun | 4 variants exporting `ACT_PARAM_TRAINING_DATA_FORMAT`. `<think>` tag detector for the eval metrics is the post-training TODO |
-| **20** | 14 | [exp14-distill-vs-rl](exp14-distill-vs-rl.recipe.json) | Distill (7B→3B) vs GRPO · GSM8K (sweep `trainer.type` ∈ {distill, grpo}) | 2 × A100 80GB | ✅ POC verified (sweep schema-validates both branches) · ⏳ training unrun | sweep generates `trl/distill` and `trl/grpo` variants; the latter is **logically inconsistent** (TRL has no GRPO), surfacing a gap: cross-backend ablations need pairs of standalone recipes, not a single ablation block |
-| **21** | 16 | [exp16-multimodal](exp16-multimodal.recipe.json) | GRPO · Qwen2.5-VL-7B · Geo3K (sweep `use_vision` ∈ {true, false}) | 2 × A100 80GB | ✅ POC verified (sweep + multi-GPU pinning) · ⏳ training, VL deps, dataset prep unrun | 2 variants; both bundles correctly emit `CUDA_VISIBLE_DEVICES=6,7` + `n_gpus_per_node=2` from `budget.cuda_visible_devices: [6, 7]`. **Qwen-VL deps & `make_geo3k_data.py` still TODO** |
+Status column legend: ✅ E2E (full real-GPU run) · ✅ POC (bundle/sweep
+spot-check) · ⏳ remaining work for full reproduction. The **Blockers /
+TODO** column lists what would still need to be done before a full
+reproduction can run; "—" means none.
+
+| Build | Orig # | Recipe | Algorithm · Model · Data | Min. hardware | Status | Blockers / TODO |
+|-------|--------|--------|--------------------------|---------------|--------|-----------------|
+| **1** | 1 | [exp01-grpo-gsm8k](exp01-grpo-gsm8k.recipe.json) | GRPO · 0.5B · GSM8K (64 samples) | 1 × A100 80GB | ✅ E2E (earlier session, bundle artifacts not retained) | — |
+| **2** | 13 | [exp13-one-shot-rlvr](exp13-one-shot-rlvr.recipe.json) | GRPO · 1.5B · GSM8K (1 sample × 100 epochs × group_size 16) | 1 × A100 80GB | ✅ E2E | — |
+| **3** | 19 | [exp19-tinyzero-replication](exp19-tinyzero-replication.recipe.json) (full) + [smoke](exp19-tinyzero-replication-smoke.recipe.json) | PPO · 3B · Countdown (full) / 0.5B · 8 steps (smoke) | 1 × A100 80GB | ✅ E2E (smoke) · ⏳ full | full 3B PPO run is ~24 h, OOMs on one 80GB card with default config |
+| **4** | 4 | [exp04-cross-task-transfer](exp04-cross-task-transfer.recipe.json) (full) + [smoke phase1](exp04-cross-task-transfer-smoke-phase1.recipe.json) / [phase2](exp04-cross-task-transfer-smoke-phase2.recipe.json) | GRPO · Countdown→GSM8K transfer (full=3B, smoke=0.5B 4+4 steps) | 1 × A100 80GB | ✅ E2E (smoke) · ⏳ full | full 3B run is ~96 h |
+| **5** | 8 | [exp08-rollout-n](exp08-rollout-n.recipe.json) | GRPO · 3B · GSM8K (sweep `group_size` ∈ {2, 4, 8, 16}) | 1 × A100 80GB | ✅ POC · ⏳ training | run all 4 cells |
+| **6** | 9 | [exp09-temperature](exp09-temperature.recipe.json) | GRPO · 3B · GSM8K (sweep `temperature` ∈ {0.6, 0.8, 1.0, 1.2}) | 1 × A100 80GB | ✅ POC · ⏳ training | run all 4 cells |
+| **7** | 3 | [exp03-data-scaling](exp03-data-scaling.recipe.json) | GRPO · 3B · GSM8K (sweep `total_samples` ∈ {100…8K}) | 1 × A100 80GB | ✅ POC · ⏳ training | run all 6 cells |
+| **8** | 6 | [exp06-model-scale](exp06-model-scale.recipe.json) | GRPO · 0.5B–7B · GSM8K (sweep `model.base`) | 1 × A100 80GB (≤3B) / 2 × A100 80GB (7B) | ✅ POC · ⏳ training | run 4 cells (7B needs bucket 2) |
+| **9** | 11 | [exp11-comprehensive-scaling](exp11-comprehensive-scaling.recipe.json) | GRPO · 4 model sizes × 6 data sizes = 24 cells | 1–2 × A100 80GB (per cell) | ✅ POC · ⏳ training | 24-cell sweep is the flagship cost; needs bucket 4+ for parallel |
+| **10** | 5 | [exp05-reward-design](exp05-reward-design.recipe.json) | GRPO · 3B · GSM8K (sweep `custom_reward_function` ∈ {binary, partial, process}) | 1 × A100 80GB | ✅ POC · ⏳ training | run all 3 cells |
+| **11** | 21 | [exp21-reward-shaping-thinking](exp21-reward-shaping-thinking.recipe.json) | GRPO · 3B · GSM8K (sweep 4 thinking-style modes) | 1 × A100 80GB | ✅ POC · ⏳ training | run all 4 cells |
+| **12** | 7 | [exp07-kl-sensitivity](exp07-kl-sensitivity.recipe.json) | rl(PPO) / grpo · 3B · GSM8K (cartesian 2 × 4 = 8 cells) | 1 × A100 80GB | ✅ POC · ⏳ training | RLOO / REMAX algorithm paths not added (would need schema enum + launcher branches) |
+| **13** | 2 | [exp02-fp8-quantization](exp02-fp8-quantization.recipe.json) | GRPO · 7B · GSM8K (cartesian `fp8_rollout` × `fp8_actor` = 4 cells) | 1 × A100 80GB | ✅ POC · ⏳ training | actor-side FP8 is a best-effort hydra path; needs torch + transformer-engine build verification |
+| **14** | 10 | [exp10-lora-vs-full](exp10-lora-vs-full.recipe.json) | GRPO · 7B · GSM8K (cartesian `model.adapter` × `lora_rank` = 6 cells) | 1 × A100 80GB (LoRA) / 2 × A100 80GB (full) | ✅ POC · ⏳ training | qlora not implemented; veRL LoRA-on-GRPO path untested |
+| **15** | 12 | [exp12-pass-at-k](exp12-pass-at-k.recipe.json) | GRPO · 3B · GSM8K + MATH | 1 × A100 80GB | ✅ POC · ⏳ evaluator + training | `evaluators/pass_at_k.py`, `make_math_data.py` |
+| **16** | 18 | [exp18-capability-retention](exp18-capability-retention.recipe.json) | GRPO + replay · 3B · GSM8K + base evals (sweep `mitigation_strategy`) | 1 × A100 80GB | ✅ POC · ⏳ evaluators + training | MMLU / HellaSwag / TruthfulQA evaluators (HumanEval already exists) |
+| **17** | 15 | [exp15-self-reflection](exp15-self-reflection.recipe.json) | GRPO + post-processing · 3B · GSM8K (sweep `post_processing`) | 1 × A100 80GB | ✅ POC · ⏳ inference wrapper + training | inference-time post-processor harness |
+| **18** | 17 | [exp17-multiturn-rl](exp17-multiturn-rl.recipe.json) | GRPO · 3B · multi-turn GSM8K (sweep `eval_max_turns`) | 1 × A100 80GB | ✅ POC · ⏳ data prep + training | `make_gsm8k_multiturn_data.py` |
+| **19** | 20 | [exp20-multiturn-thinking](exp20-multiturn-thinking.recipe.json) | GRPO · 3B · GSM8K (sweep `training_data_format`) | 1 × A100 80GB | ✅ POC · ⏳ eval harness + training | `<think>` tag detector + multi-turn eval wrapper |
+| **20** | 14 | [exp14-distill-vs-rl](exp14-distill-vs-rl.recipe.json) | Distill (7B→3B) vs GRPO · GSM8K (sweep `trainer.type`) | 2 × A100 80GB | ✅ POC · ⏳ design fix + training | cross-backend ablation needs paired standalone recipes, not a single `ablation` block (sweep produces a `trl/grpo` variant that has no real backend) |
+| **21** | 16 | [exp16-multimodal](exp16-multimodal.recipe.json) | GRPO · Qwen2.5-VL-7B · Geo3K (sweep `use_vision`) | 2 × A100 80GB | ✅ POC · ⏳ deps + data prep + training | Qwen-VL deps in venv, `make_geo3k_data.py` |
 
 ## Recommended build order
 
@@ -77,13 +103,22 @@ incrementally adds one new piece of infrastructure at a time.
 
 ### Status legend
 
-- ✅ **verified** — completed at least one full end-to-end run on the listed
-  hardware; loss / reward curves and final metrics observed.
-- ⏳ **unverified** — `act train --dry-run` succeeds (recipe is well-formed and
-  the launcher generates a bundle), but real training has not been observed and
-  may surface bugs in verl 0.7.x or in the launcher's overrides for that path.
-- 🚧 **blocked** — known-broken; the dependency in the rightmost column has to
-  land before the recipe is runnable.
+- ✅ **E2E** — completed at least one full end-to-end training run on the
+  listed hardware; loss / reward curves observed and the result is in the
+  results DB (`data/results.db`). When a build has both a *full* and a
+  *smoke* recipe, "✅ E2E (smoke)" means only the smoke variant has been
+  executed.
+- ✅ **POC** — `act train --dry-run` succeeds, the sweep wrapper (if
+  applicable) materialises all variants, and the spot-checked variant's
+  `hydra-overrides.txt` / `env.sh` contains the expected keys. The recipe
+  is well-formed all the way down to launcher dispatch — what is **not**
+  proven is the runtime path of veRL 0.7.x at full scale.
+- ⏳ **remaining work** — listed in the *Blockers / TODO* column; usually
+  a real training run, an evaluator that is not yet implemented, or a data
+  prep script.
+- 🚧 **blocked** (currently unused) — would mean known-broken; the
+  dependency in the rightmost column has to land before the recipe is
+  runnable.
 
 ### Hardware buckets
 

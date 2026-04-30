@@ -4,12 +4,13 @@
 
 > **可执行的对应版本** 见 [`recipes/experiments/README.md`](recipes/experiments/README.md)
 > — 每个实验对应一个 schema-valid 的 recipe + 5 步端到端命令模板 + 最低硬件需求 +
-> 当前验证状态（已验证 / 未验证 / 阻塞依赖）。本文档是研究背景与实验设计；
-> 索引页是操作清单。
+> 当前验证状态。本文档是研究背景与实验设计；索引页是操作清单。
 >
-> **Verified today**: exp01 (GRPO baseline). 其余 20 个 recipe 已通过 `act
-> train --dry-run`，但完整端到端执行需要补齐每个实验列出的数据准备脚本、
-> evaluator 或 launcher 路径修复。
+> **Verification snapshot**: 21/21 builds 已通过 POC（recipe 解析、sweep
+> 展开、launcher 派发到正确的 hydra/env），其中 4 个完成端到端真实 GPU 跑通
+> （exp01、exp13、exp19-smoke、exp04-smoke）。剩下 17 个的"⏳"主要是真训练
+> 时间 + 部分 evaluator / 数据准备脚本未实现 — 详见索引页 *Blockers / TODO*
+> 列。
 
 ---
 
