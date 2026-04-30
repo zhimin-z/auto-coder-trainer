@@ -99,7 +99,7 @@
       "properties": {
         "benchmarks": {
           "type": "array",
-          "items": { "enum": ["swe-bench-lite", "swe-bench-verified", "swe-rebench", "humaneval", "mbpp", "custom"] }
+          "items": { "enum": ["swe-bench-lite", "swe-bench-verified", "swe-rebench", "humaneval", "mbpp", "mmlu", "hellaswag", "truthfulqa", "pass_at_k_gsm8k", "pass_at_k_math", "custom"] }
         },
         "metrics": { "type": "array", "items": { "type": "string" } },
         "seeds": { "type": "array", "items": { "type": "integer" }, "default": [42, 123, 456] }
@@ -123,6 +123,14 @@
         "max_gpu_hours": { "type": "number" },
         "gpu_type": { "type": "string" },
         "max_cost_usd": { "type": "number" },
+        "cuda_visible_devices": {
+          "description": "Pin training to specific GPU indices. Int (single GPU), array of ints, or comma-separated string. Written into the launcher's env.sh as CUDA_VISIBLE_DEVICES. Bypasses SLURM allocation when set.",
+          "oneOf": [
+            { "type": "integer", "minimum": 0 },
+            { "type": "array", "items": { "type": "integer", "minimum": 0 } },
+            { "type": "string" }
+          ]
+        },
         "slurm": {
           "type": "object",
           "description": "SLURM job scheduler configuration for HPC execution.",

@@ -54,8 +54,12 @@ def test_tinyzero_backend_is_schema_valid_and_writes_bundle(tmp_path: Path) -> N
     run_script = Path(paths["run_script"]).read_text()
     env_template = Path(paths["env"]).read_text()
 
-    assert launcher["entrypoint"]["module"] == "verl.trainer.fsdp_sft_trainer"
-    assert "data.train_files=${ACT_TRAIN_FILE}" in overrides
+    assert launcher["entrypoint"]["module"] == "verl.trainer.sft_trainer"
+    assert "data.train_files=${oc.env:ACT_TRAIN_FILE}" in overrides
+    assert "data.messages_key=messages" in overrides
+    assert "engine.strategy=fsdp" in overrides
+    assert "engine.wrap_policy.min_num_params=" in overrides
+    assert "model.path=" in overrides
     assert "torchrun --standalone" in run_script
     assert "ACT_TRAIN_FILE" in env_template
 
@@ -79,6 +83,34 @@ def test_train_prepares_tinyzero_bundle_and_execution_plan(tmp_path: Path, capsy
     assert plan["mode"] == "prepared"
     assert plan["launcher"]["backend"] == "tinyzero"
     assert Path(plan["launcher"]["files"]["run_script"]).exists()
+
+
+def test_tinyzero_recipe_pins_specific_gpu_via_budget(tmp_path: Path) -> None:
+    recipe = _tinyzero_sft_recipe()
+    recipe["budget"] = {"cuda_visible_devices": 7}
+
+    config = compile_recipe(recipe)
+    bundle = build_tinyzero_launcher_bundle(config.__dict__, tmp_path)
+    paths = write_tinyzero_launcher_bundle(bundle)
+
+    env_template = Path(paths["env"]).read_text()
+    assert 'export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-7}"' in env_template
+    # Single GPU index -> nproc=1
+    assert 'export ACT_NPROC_PER_NODE="${ACT_NPROC_PER_NODE:-1}"' in env_template
+
+
+def test_tinyzero_multi_gpu_list_drives_nproc(tmp_path: Path) -> None:
+    recipe = _tinyzero_sft_recipe()
+    recipe["budget"] = {"cuda_visible_devices": [6, 7]}
+
+    config = compile_recipe(recipe)
+    bundle = build_tinyzero_launcher_bundle(config.__dict__, tmp_path)
+    paths = write_tinyzero_launcher_bundle(bundle)
+
+    env_template = Path(paths["env"]).read_text()
+    assert 'export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-6,7}"' in env_template
+    # List of 2 GPUs should make torchrun spawn 2 workers, not fall back to gpu_type.
+    assert 'export ACT_NPROC_PER_NODE="${ACT_NPROC_PER_NODE:-2}"' in env_template
 
 
 def test_train_tinyzero_with_slurm_submits_and_tracks_jobs(

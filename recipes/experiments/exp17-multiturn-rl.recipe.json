@@ -1,0 +1,61 @@
+{
+  "id": "recipe-exp17-multiturn-rl",
+  "name": "Exp 17: Multi-turn dialogue RL on GSM8K (split into 2-3 turns)",
+  "version": "1.0",
+  "source_papers": ["TinyZero_实验方案.md#实验-17"],
+  "model": {
+    "base": "Qwen/Qwen2.5-3B-Instruct",
+    "size": "3B",
+    "adapter": "full"
+  },
+  "dataset": {
+    "sources": [
+      {
+        "name": "gsm8k_multiturn",
+        "path": "openai/gsm8k",
+        "mix_weight": 1.0
+      }
+    ],
+    "total_samples": 5000
+  },
+  "trainer": {
+    "type": "grpo",
+    "backend": "tinyzero",
+    "params": {
+      "lr": 1e-6,
+      "epochs": 3,
+      "train_batch_size": 32,
+      "ppo_mini_batch_size": 16,
+      "ppo_micro_batch_size": 4,
+      "ppo_epochs": 1,
+      "max_prompt_length": 1024,
+      "max_response_length": 1024,
+      "group_size": 8,
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "kl_coeff": 0.001,
+      "use_kl_loss": true,
+      "gradient_checkpointing": true,
+      "gpu_memory_utilization": 0.4,
+      "rollout_tp_size": 1,
+      "multiturn_split_strategy": "stepwise"
+    }
+  },
+  "ablation": [
+    {
+      "name": "turn_count",
+      "variable": "trainer.params.eval_max_turns",
+      "values": [1, 2, 5]
+    }
+  ],
+  "eval": {
+    "benchmarks": [],
+    "metrics": ["single_turn_accuracy", "two_turn_accuracy", "five_turn_accuracy", "context_retention"],
+    "seeds": [42]
+  },
+  "budget": {
+    "max_gpu_hours": 96,
+    "gpu_type": "1xA100-80GB",
+    "cuda_visible_devices": 7
+  }
+}

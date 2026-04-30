@@ -1,0 +1,60 @@
+{
+  "id": "recipe-exp16-multimodal",
+  "name": "Exp 16: Multimodal reasoning RL on Geo3K (Qwen2.5-VL)",
+  "version": "1.0",
+  "source_papers": ["TinyZero_实验方案.md#实验-16"],
+  "model": {
+    "base": "Qwen/Qwen2.5-VL-7B-Instruct",
+    "size": "7B",
+    "adapter": "full"
+  },
+  "dataset": {
+    "sources": [
+      {
+        "name": "geo3k",
+        "path": "hiyouga/geometry3k",
+        "mix_weight": 1.0
+      }
+    ],
+    "total_samples": 3000
+  },
+  "trainer": {
+    "type": "grpo",
+    "backend": "tinyzero",
+    "params": {
+      "lr": 1e-6,
+      "epochs": 3,
+      "train_batch_size": 16,
+      "ppo_mini_batch_size": 8,
+      "ppo_micro_batch_size": 2,
+      "ppo_epochs": 1,
+      "max_prompt_length": 1024,
+      "max_response_length": 1024,
+      "group_size": 8,
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "kl_coeff": 0.001,
+      "use_kl_loss": true,
+      "gradient_checkpointing": true,
+      "gpu_memory_utilization": 0.4,
+      "rollout_tp_size": 1
+    }
+  },
+  "ablation": [
+    {
+      "name": "modality",
+      "variable": "trainer.params.use_vision",
+      "values": [true, false]
+    }
+  ],
+  "eval": {
+    "benchmarks": [],
+    "metrics": ["accuracy_geo3k", "vision_contribution_delta"],
+    "seeds": [42]
+  },
+  "budget": {
+    "max_gpu_hours": 120,
+    "gpu_type": "2xA100-80GB",
+    "cuda_visible_devices": [6, 7]
+  }
+}

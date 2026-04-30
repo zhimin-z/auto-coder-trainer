@@ -1,0 +1,41 @@
+{
+  "id": "recipe-smoke-001",
+  "name": "Smoke Test — Qwen2.5-0.5B SFT on toy arithmetic",
+  "version": "1.0",
+  "model": {
+    "base": "Qwen/Qwen2.5-0.5B-Instruct",
+    "size": "0.5B",
+    "adapter": "full"
+  },
+  "dataset": {
+    "sources": [
+      {
+        "name": "toy-arithmetic",
+        "path": "toy_data/train.parquet",
+        "mix_weight": 1.0
+      }
+    ],
+    "total_samples": 100
+  },
+  "trainer": {
+    "type": "sft",
+    "backend": "tinyzero",
+    "params": {
+      "lr": 2e-5,
+      "epochs": 1,
+      "batch_size": 4,
+      "max_length": 256,
+      "warmup_ratio": 0.1,
+      "fsdp_strategy": "fsdp"
+    }
+  },
+  "eval": {
+    "benchmarks": [],
+    "seeds": [42]
+  },
+  "budget": {
+    "max_gpu_hours": 0.1,
+    "gpu_type": "1xA100-80GB",
+    "cuda_visible_devices": 7
+  }
+}

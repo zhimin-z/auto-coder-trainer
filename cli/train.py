@@ -675,6 +675,16 @@ def _load_external_import_context(
     if existing is not None:
         trainer_type = existing.get("trainer_type", trainer_type)
         resolved_backend = existing.get("backend", resolved_backend)
+    # Prefer the recipe's declared trainer.type / trainer.backend over defaults
+    # so RL recipes don't get mis-tagged as SFT in the DB.
+    recipe_trainer = recipe.get("trainer") if isinstance(recipe, dict) else None
+    if isinstance(recipe_trainer, dict):
+        recipe_type = recipe_trainer.get("type")
+        if isinstance(recipe_type, str) and recipe_type:
+            trainer_type = recipe_type
+        recipe_backend = recipe_trainer.get("backend")
+        if isinstance(recipe_backend, str) and recipe_backend:
+            resolved_backend = recipe_backend
 
     return {
         "recipe_id": recipe_id,

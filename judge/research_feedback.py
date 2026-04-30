@@ -11,7 +11,6 @@ from typing import Any
 
 from judge.judge import JudgementResult, Verdict
 
-
 # ---------------------------------------------------------------------------
 # Query / modification templates keyed by failure cause
 # ---------------------------------------------------------------------------
@@ -253,7 +252,11 @@ class ResearchFeedback:
 
         # Enrich queries with recipe context (model name, task type) so
         # that collect can produce more targeted results.
-        model_name = recipe.get("model", recipe.get("base_model", ""))
+        model_field = recipe.get("model", recipe.get("base_model", ""))
+        if isinstance(model_field, dict):
+            model_name = model_field.get("base", "")
+        else:
+            model_name = model_field or ""
         if model_name:
             for q in queries:
                 if model_name.lower() not in q["query"].lower():

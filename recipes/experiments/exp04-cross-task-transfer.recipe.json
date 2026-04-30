@@ -1,0 +1,61 @@
+{
+  "id": "recipe-exp04-cross-task-transfer",
+  "name": "Exp 04: Reasoning transfer Countdown→GSM8K",
+  "version": "1.0",
+  "source_papers": ["TinyZero_实验方案.md#实验-4"],
+  "model": {
+    "base": "Qwen/Qwen2.5-3B-Instruct",
+    "size": "3B",
+    "adapter": "full"
+  },
+  "dataset": {
+    "sources": [
+      {
+        "name": "countdown",
+        "path": "Jiayi-Pan/Countdown-Tasks-3to4",
+        "mix_weight": 1.0
+      }
+    ],
+    "total_samples": 8000
+  },
+  "trainer": {
+    "type": "grpo",
+    "backend": "tinyzero",
+    "params": {
+      "lr": 1e-6,
+      "epochs": 3,
+      "train_batch_size": 32,
+      "ppo_mini_batch_size": 16,
+      "ppo_micro_batch_size": 4,
+      "ppo_epochs": 1,
+      "max_prompt_length": 512,
+      "max_response_length": 1024,
+      "group_size": 8,
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "kl_coeff": 0.001,
+      "use_kl_loss": true,
+      "gradient_checkpointing": true,
+      "gpu_memory_utilization": 0.4,
+      "rollout_tp_size": 1,
+      "custom_reward_function": "scripts/reward_countdown.py:compute_score"
+    }
+  },
+  "ablation": [
+    {
+      "name": "transfer_protocol",
+      "variable": "trainer.params.transfer_phase",
+      "values": ["countdown_only", "countdown_then_gsm8k", "gsm8k_only"]
+    }
+  ],
+  "eval": {
+    "benchmarks": [],
+    "metrics": ["countdown_reward_mean", "gsm8k_zero_shot", "gsm8k_finetuned"],
+    "seeds": [42]
+  },
+  "budget": {
+    "max_gpu_hours": 96,
+    "gpu_type": "1xA100-80GB",
+    "cuda_visible_devices": 7
+  }
+}

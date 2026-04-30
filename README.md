@@ -40,21 +40,92 @@
 
 ## Quick Start
 
+### Prerequisites
+
+- Linux + at least one NVIDIA GPU (the smoke test below needs ~2 GB of free GPU memory)
+- **Python 3.11+** — Python 3.10 will fail because `scipy>=1.17` (pulled in by the `[all]` extra) dropped 3.10 support
+
+### Install (≈ 5 min)
+
 ```bash
-# Install
 git clone https://github.com/chenghaoYang/auto-coder-trainer.git
 cd auto-coder-trainer
 pip install -e ".[all,dev]"
 
-# Run the full pipeline in one command
-act pipeline --query "coding agent training" --report-format blog
-
-# Or step by step
-act collect "coding agent training"
-act compose --atoms swe-fuse,entropy-rl
-act train recipes/examples/baseline-sft.recipe.json
-act report --recipe-id recipe-baseline-sft-001 --format blog
+# flash-attn is imported at module load by verl's SFT trainer but is not
+# pulled in automatically (it has to compile or fetch a CUDA-specific wheel).
+pip install flash-attn --no-build-isolation
 ```
+
+### Smoke test (≈ 2 min, 1 GPU)
+
+This runs a 0.5B-parameter SFT on 96 rows of toy arithmetic, then sends the
+results back through the judge and report generator — exercising every stage
+(`act train` → `torchrun` → FSDP → checkpoint → judge → report) end-to-end
+before you invest in real data.
+
+> The recipe pins training to **GPU 7** by default (see
+> [`smoke-tinyzero.recipe.json`](recipes/examples/smoke-tinyzero.recipe.json#L36-L40)).
+> If your machine has a different free GPU, edit `budget.cuda_visible_devices`
+> in that file before continuing — single integer for one GPU, e.g. `0`, or a
+> list like `[0, 1]` for multi-GPU (multi-GPU additionally requires bumping
+> `trainer.params.batch_size` to a multiple of GPU count).
+
+Run all five steps from the **repo root** in one go:
+
+```bash
+# 1. Generate the launch bundle (writes outputs/recipe-smoke-001/)
+act train recipes/examples/smoke-tinyzero.recipe.json
+
+# 2. Materialise the toy dataset (verl expects a `messages` parquet column)
+python scripts/make_toy_data.py outputs/recipe-smoke-001/tinyzero/toy_data
+
+# 3. Run training inside the bundle (GPU pinning comes from the recipe)
+( cd outputs/recipe-smoke-001/tinyzero \
+  && export ACT_TRAIN_FILE=$(pwd)/toy_data/train.parquet \
+  && export ACT_VAL_FILE=$(pwd)/toy_data/val.parquet \
+  && bash run.sh )
+
+# 4. Import the bundle's results back into the SQLite DB so the judge sees them
+act train recipes/examples/smoke-tinyzero.recipe.json \
+  --import-results outputs/recipe-smoke-001/tinyzero \
+  --recipe-id recipe-smoke-001
+
+# 5. Generate the blog-format report
+act report --recipe-id recipe-smoke-001 --format blog
+```
+
+**Expected**: `train/loss` falls from ~1.4 to <0.1, `val/loss` prints, a
+checkpoint lands in `outputs/recipe-smoke-001/tinyzero/checkpoints/`,
+`results/train_exit_code.txt` is `0`, the judge returns a verdict (most likely
+`needs_rerun` — toy data has no baseline to compare against), and the report is
+written to `outputs/recipe-smoke-001/reports/report.md`.
+
+### Real training
+
+Once smoke test passes, swap the model, dataset, and benchmarks in your own
+recipe — see [Recipe IR](#recipe-ir) for the full schema and
+[`recipes/examples/`](recipes/examples/) for SFT / RL / distillation
+templates. The same five steps work for real training; the difference is your
+recipe references real HF datasets (you provide the parquet conversion) and
+real benchmarks (e.g. `swe-bench-lite`, `humaneval`).
+
+The closed-loop variant `act pipeline` automates collect → compose → train →
+judge → loop, but its `act collect` stage currently requires the optional
+`aris/` package; if `act collect` fails with `No module named 'aris'`, use
+the five-step recipe-driven flow above instead.
+
+### Research experiment library
+
+For the 21 reproducible TinyZero/veRL experiments described in
+[`TinyZero_实验方案.md`](TinyZero_实验方案.md) (algorithm comparison,
+data scaling, Pass@k, distillation, multi-modal, etc.), see the experiment
+index at [`recipes/experiments/README.md`](recipes/experiments/README.md).
+Each experiment has a runnable recipe, a status marker (✅ verified / ⏳
+unverified), a minimum-hardware bucket, and a list of any blocking
+dependencies. Currently **exp01 (GRPO baseline) is verified end-to-end**;
+the other 20 generate valid bundles but need additional data prep scripts,
+evaluators, or launcher work to run fully.
 
 ---
 

@@ -1,0 +1,60 @@
+{
+  "id": "recipe-exp14-distill-vs-rl",
+  "name": "Exp 14: Distillation vs GRPO (7B teacher → 3B student)",
+  "version": "1.0",
+  "source_papers": ["TinyZero_实验方案.md#实验-14"],
+  "model": {
+    "base": "Qwen/Qwen2.5-3B-Instruct",
+    "size": "3B",
+    "adapter": "full"
+  },
+  "dataset": {
+    "sources": [
+      {
+        "name": "gsm8k",
+        "path": "openai/gsm8k",
+        "mix_weight": 1.0
+      }
+    ],
+    "total_samples": 8000
+  },
+  "distill": {
+    "strategy": "trajectory",
+    "teacher_model": "Qwen/Qwen2.5-7B-Instruct",
+    "stages": ["positive_sft"],
+    "refine_algorithm": "dpo",
+    "condense": {
+      "strategy": "edge_preserving",
+      "max_chars": 12000
+    }
+  },
+  "trainer": {
+    "type": "distill",
+    "backend": "trl",
+    "params": {
+      "lr": 5e-6,
+      "epochs": 3,
+      "batch_size": 8,
+      "gradient_accumulation_steps": 4,
+      "max_length": 1024,
+      "warmup_ratio": 0.05
+    }
+  },
+  "ablation": [
+    {
+      "name": "training_method",
+      "variable": "trainer.type",
+      "values": ["distill", "grpo"]
+    }
+  ],
+  "eval": {
+    "benchmarks": ["pass_at_k_gsm8k"],
+    "metrics": ["pass@1", "pass@10", "reasoning_path_diversity"],
+    "seeds": [42, 123]
+  },
+  "budget": {
+    "max_gpu_hours": 96,
+    "gpu_type": "1xA100-80GB",
+    "cuda_visible_devices": 7
+  }
+}
